@@ -71,7 +71,7 @@ function RouteComponent() {
   return (
     <SidebarProvider>
       <AppSidebar />
-      <SidebarInset>
+      <SidebarInset className="min-h-0 overflow-hidden">
         <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4">
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-full" />
@@ -80,7 +80,7 @@ function RouteComponent() {
             <ModeToggle />
           </div>
         </header>
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto">
           <Outlet />
         </div>
       </SidebarInset>

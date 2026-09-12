@@ -1,4 +1,4 @@
-import { MessageSquare, Send } from 'lucide-react'
+import { FileText, MessageSquare, Send } from 'lucide-react'
 
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import {
@@ -9,17 +9,14 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty'
 import { Field, FieldDescription } from '@/components/ui/field'
+import { Button } from '@/components/ui/button'
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupTextarea,
 } from '@/components/ui/input-group'
-import {
-  Message,
-  MessageContent,
-  MessageFooter,
-} from '@/components/ui/message'
+import { Message, MessageContent, MessageFooter } from '@/components/ui/message'
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -28,17 +25,31 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller'
-import {
-  citationLines,
-  formatSessionDate,
-  type MessageResponse,
-} from '#/lib/sessions.ts'
+import { citationLines, formatSessionDate } from '#/lib/sessions.ts'
+import type { MessageResponse } from '#/lib/sessions.ts'
 
-export function SessionChat({ messages }: { messages: Array<MessageResponse> }) {
+export function SessionChat({
+  messages,
+  onShowPdf,
+}: {
+  messages: Array<MessageResponse>
+  onShowPdf?: () => void
+}) {
   return (
-    <section className="flex h-full min-h-0 flex-1 flex-col border-border bg-background md:border-l">
-      <div className="flex h-10 shrink-0 items-center border-b border-border px-3">
-        <p className="text-muted-foreground text-xs tracking-wide">Margin</p>
+    <section className="flex h-full min-h-0 flex-1 flex-col overflow-hidden border-border bg-background md:border-l">
+      <div className="flex h-11 shrink-0 items-center border-b border-border px-3">
+        <p className="font-serif text-sm tracking-tight">Chat</p>
+        {onShowPdf ? (
+          <Button
+            className="ml-auto"
+            size="sm"
+            variant="outline"
+            onPress={onShowPdf}
+          >
+            <FileText data-icon="inline-start" />
+            Show PDF
+          </Button>
+        ) : null}
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1">
@@ -53,10 +64,11 @@ export function SessionChat({ messages }: { messages: Array<MessageResponse> }) 
                           <EmptyMedia variant="icon">
                             <MessageSquare />
                           </EmptyMedia>
-                          <EmptyTitle>No messages in this chat</EmptyTitle>
+                          <EmptyTitle>Chat stays next to the paper</EmptyTitle>
                           <EmptyDescription>
-                            Asking is not available yet. When it is, questions
-                            you type here will stay next to the paper.
+                            Asking is not available yet. Read the paper for now;
+                            questions you type here will sit in this margin when
+                            they are.
                           </EmptyDescription>
                         </EmptyHeader>
                       </Empty>
@@ -102,10 +114,7 @@ export function SessionChat({ messages }: { messages: Array<MessageResponse> }) 
         <div className="shrink-0 border-t border-border p-3">
           <Field data-disabled>
             <InputGroup isDisabled>
-              <InputGroupTextarea
-                placeholder="Ask about this paper"
-                rows={2}
-              />
+              <InputGroupTextarea placeholder="Ask about this paper" rows={2} />
               <InputGroupAddon align="block-end">
                 <InputGroupButton
                   aria-label="Send"

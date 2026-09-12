@@ -55,11 +55,19 @@ function RouteComponent() {
     return <ChatWorkspaceSkeleton />
   }
 
-  return <ChatWorkspace session={sessionQuery.data} />
+  return (
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+      <ChatWorkspace session={sessionQuery.data} />
+    </div>
+  )
 }
 
 function ChatSessionPending() {
-  return <ChatWorkspaceSkeleton />
+  return (
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+      <ChatWorkspaceSkeleton />
+    </div>
+  )
 }
 
 function ChatSessionError({ error }: { error: Error }) {

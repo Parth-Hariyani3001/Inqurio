@@ -2,7 +2,7 @@
 
 Inquiro is a RAG-based backend for analysing research papers. Users ingest papers by OpenAlex ID; the system fetches metadata and a PDF, parses the document, chunks it, embeds the text, and stores vectors for later retrieval.
 
-This repository is the FastAPI API, Celery worker, and supporting infrastructure. Chat, annotations, and RAG Q&A over papers are modelled in the database but not exposed as HTTP APIs yet.
+This repository is the FastAPI API, Celery worker, and supporting infrastructure. Chat and RAG Q&A over papers are modelled in the database but not exposed as HTTP APIs yet.
 
 ## Current capabilities
 
@@ -212,7 +212,6 @@ Celery task `process_paper` (`src/worker/process_paper.py`):
 | `user_papers` | User ↔ paper assignment and tags |
 | `sections` / `chunks` | Parsed structure used for RAG |
 | `chats` / `messages` | Planned Q&A (schema only) |
-| `annotations` | Planned highlights (schema only) |
 
 ## Common commands
 

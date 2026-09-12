@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { FileText, MessageSquare } from 'lucide-react'
 
 import { PdfFolio } from '#/components/chats/pdf-folio.tsx'
@@ -12,12 +13,31 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { SessionDetailResponse } from '#/lib/sessions.ts'
 
 export function ChatWorkspace({ session }: { session: SessionDetailResponse }) {
+  const [pdfVisible, setPdfVisible] = useState(true)
+  const [mobileTab, setMobileTab] = useState<'paper' | 'chat'>('paper')
+
+  function showPdf() {
+    setPdfVisible(true)
+    setMobileTab('paper')
+  }
+
+  function hidePdf() {
+    setPdfVisible(false)
+    setMobileTab('chat')
+  }
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex min-h-0 flex-1 flex-col md:hidden">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:hidden">
         <Tabs
-          className="flex min-h-0 flex-1 gap-0"
-          defaultSelectedKey="paper"
+          className="flex min-h-0 flex-1 gap-0 overflow-hidden"
+          selectedKey={mobileTab}
+          onSelectionChange={(key) => {
+            if (typeof key !== 'string') return
+            const nextTab = key as 'paper' | 'chat'
+            if (nextTab === 'paper') setPdfVisible(true)
+            setMobileTab(nextTab)
+          }}
         >
           <div className="shrink-0 border-b border-border px-3 py-2">
             <TabsList className="w-full">
@@ -31,22 +51,57 @@ export function ChatWorkspace({ session }: { session: SessionDetailResponse }) {
               </TabsTrigger>
             </TabsList>
           </div>
-          <TabsContent className="flex min-h-0 flex-1 flex-col" id="paper">
-            <PdfFolio paperId={session.paper_id} title={session.title} />
+          <TabsContent
+            className="flex min-h-0 flex-1 flex-col overflow-hidden"
+            id="paper"
+          >
+            <PdfFolio
+              paperId={session.paper_id}
+              title={session.title}
+              onHide={hidePdf}
+            />
           </TabsContent>
-          <TabsContent className="flex min-h-0 flex-1 flex-col" id="chat">
-            <SessionChat messages={session.messages} />
+          <TabsContent
+            className="flex min-h-0 flex-1 flex-col overflow-hidden"
+            id="chat"
+          >
+            <SessionChat
+              messages={session.messages}
+              onShowPdf={!pdfVisible ? showPdf : undefined}
+            />
           </TabsContent>
         </Tabs>
       </div>
-      <div className="hidden min-h-0 flex-1 md:flex">
-        <ResizablePanelGroup className="h-full min-h-0" orientation="horizontal">
-          <ResizablePanel className="min-h-0" defaultSize="58%" minSize="30%">
-            <PdfFolio paperId={session.paper_id} title={session.title} />
-          </ResizablePanel>
-          <ResizableHandle withHandle />
-          <ResizablePanel className="min-h-0" defaultSize="42%" minSize="24%">
-            <SessionChat messages={session.messages} />
+      <div className="hidden min-h-0 flex-1 overflow-hidden md:flex">
+        <ResizablePanelGroup
+          className="h-full min-h-0"
+          orientation="horizontal"
+        >
+          {pdfVisible ? (
+            <>
+              <ResizablePanel
+                className="min-h-0 overflow-hidden"
+                defaultSize="58%"
+                minSize="30%"
+              >
+                <PdfFolio
+                  paperId={session.paper_id}
+                  title={session.title}
+                  onHide={hidePdf}
+                />
+              </ResizablePanel>
+              <ResizableHandle withHandle />
+            </>
+          ) : null}
+          <ResizablePanel
+            className="min-h-0 overflow-hidden"
+            defaultSize={pdfVisible ? '42%' : '100%'}
+            minSize={pdfVisible ? '24%' : '100%'}
+          >
+            <SessionChat
+              messages={session.messages}
+              onShowPdf={!pdfVisible ? showPdf : undefined}
+            />
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
@@ -56,7 +111,7 @@ export function ChatWorkspace({ session }: { session: SessionDetailResponse }) {
 
 export function ChatWorkspaceSkeleton() {
   return (
-    <div className="flex min-h-0 flex-1 gap-0">
+    <div className="flex h-full min-h-0 flex-1 gap-0 overflow-hidden">
       <Skeleton className="hidden flex-1 md:block" />
       <Skeleton className="flex-1" />
     </div>

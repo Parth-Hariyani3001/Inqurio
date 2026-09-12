@@ -1,68 +1,56 @@
-import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import {
+  AlertCircle,
   ChevronLeft,
   ChevronRight,
-  Highlighter,
   Minus,
+  PanelLeftClose,
   Plus,
   Scan,
 } from 'lucide-react'
-import type { Selection as AriaSelection } from 'react-aria-components'
 
-import { PdfHighlightLayer } from '#/components/chats/pdf-highlight-layer.tsx'
 import '#/components/chats/pdf-viewer.css'
 import { Button } from '@/components/ui/button'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { Separator } from '@/components/ui/separator'
+import { Tooltip, TooltipTrigger } from '@/components/ui/tooltip'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { AlertCircle } from 'lucide-react'
-import {
-  clientRectsToSelection,
-  getPageMetrics,
-  loadPaperPdf,
-  pointInPdfRect,
-  TextLayer,
-  type PageMetrics,
-  type PageViewport,
-  type PDFDocumentProxy,
-  type PDFPageProxy,
-  type RenderTask,
+import { getPageMetrics, loadPaperPdf, TextLayer } from '#/lib/pdf.ts'
+import type {
+  PageMetrics,
+  PDFDocumentProxy,
+  PDFPageProxy,
+  RenderTask,
 } from '#/lib/pdf.ts'
-import type { AnnotationResponse, AnnotationSelection } from '#/lib/annotations.ts'
-import { HIGHLIGHT_COLORS } from '#/lib/annotations.ts'
 import { cn } from '@/lib/utils'
 
 const MIN_SCALE = 0.5
 const MAX_SCALE = 3
 const SCALE_STEP = 0.15
 const NEARBY_PAGES = 2
+const MIN_OUTPUT_SCALE = 2
+const MAX_CANVAS_PIXELS = 16_777_216
+
+function FolioTip({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <TooltipTrigger>
+      {children}
+      <Tooltip>{label}</Tooltip>
+    </TooltipTrigger>
+  )
+}
 
 export function PdfViewer({
   paperId,
   token,
-  annotations,
-  color,
-  onColorChange,
-  activeId,
-  onActiveIdChange,
-  onCreateFromSelection,
-  toolbarStart,
-  toolbarEnd,
-  focusPage,
-  focusRequest,
+  title,
+  onHide,
 }: {
   paperId: string
   token: string
-  annotations: Array<AnnotationResponse>
-  color: string
-  onColorChange: (color: string) => void
-  activeId: string | null
-  onActiveIdChange: (id: string | null) => void
-  onCreateFromSelection: (selection: AnnotationSelection) => void
-  toolbarStart?: ReactNode
-  toolbarEnd?: ReactNode
-  focusPage?: number | null
-  focusRequest?: number
+  title?: string
+  onHide?: () => void
 }) {
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [metrics, setMetrics] = useState<Array<PageMetrics>>([])
@@ -138,12 +126,6 @@ export function PdfViewer({
     setScale(fitWidthScale)
   }, [fitWidthScale, hasMeasured, metrics])
 
-  useEffect(() => {
-    if (!focusPage) return
-    pageEls.current.get(focusPage)?.scrollIntoView({ block: 'start' })
-    setCurrentPage(focusPage)
-  }, [focusPage, focusRequest])
-
   function scrollToPage(pageNumber: number) {
     pageEls.current.get(pageNumber)?.scrollIntoView({ block: 'start' })
     setCurrentPage(pageNumber)
@@ -160,12 +142,6 @@ export function PdfViewer({
   }
 
   const pageCount = pdf?.numPages ?? 0
-
-  function onColorSelection(selection: AriaSelection) {
-    if (selection === 'all') return
-    const next = [...selection][0]
-    if (typeof next === 'string') onColorChange(next)
-  }
 
   if (notReady) {
     return (
@@ -194,96 +170,91 @@ export function PdfViewer({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
-      <div className="flex h-10 min-w-0 shrink-0 items-center gap-2 overflow-hidden border-b border-border bg-card px-2">
-        {toolbarStart}
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex h-11 min-w-0 shrink-0 items-center gap-2 border-b border-border bg-card px-2">
+        <p className="min-w-0 flex-1 truncate font-serif text-sm tracking-tight">
+          {title ?? 'Paper'}
+        </p>
         <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1">
-          <Button
-            aria-label="Previous page"
-            size="icon-sm"
-            variant="ghost"
-            isDisabled={currentPage <= 1}
-            onPress={() => scrollToPage(Math.max(1, currentPage - 1))}
-          >
-            <ChevronLeft />
-          </Button>
-          <p className="min-w-16 text-center text-xs tabular-nums text-muted-foreground">
+          <FolioTip label="Previous page">
+            <Button
+              aria-label="Previous page"
+              size="icon-sm"
+              variant="ghost"
+              isDisabled={currentPage <= 1}
+              onPress={() => scrollToPage(Math.max(1, currentPage - 1))}
+            >
+              <ChevronLeft />
+            </Button>
+          </FolioTip>
+          <p className="min-w-14 text-center text-xs tabular-nums text-muted-foreground">
             {currentPage} / {pageCount}
           </p>
-          <Button
-            aria-label="Next page"
-            size="icon-sm"
-            variant="ghost"
-            isDisabled={currentPage >= pageCount}
-            onPress={() => scrollToPage(Math.min(pageCount, currentPage + 1))}
-          >
-            <ChevronRight />
-          </Button>
-          <Button
-            aria-label="Zoom out"
-            size="icon-sm"
-            variant="ghost"
-            isDisabled={scale <= MIN_SCALE}
-            onPress={() =>
-              setScale((current) =>
-                Math.max(MIN_SCALE, current - SCALE_STEP),
-              )
-            }
-          >
-            <Minus />
-          </Button>
-          <Button
-            aria-label="Fit width"
-            size="icon-sm"
-            variant="ghost"
-            onPress={() => setScale(fitWidthScale)}
-          >
-            <Scan />
-          </Button>
-          <Button
-            aria-label="Zoom in"
-            size="icon-sm"
-            variant="ghost"
-            isDisabled={scale >= MAX_SCALE}
-            onPress={() =>
-              setScale((current) =>
-                Math.min(MAX_SCALE, current + SCALE_STEP),
-              )
-            }
-          >
-            <Plus />
-          </Button>
-          {toolbarEnd}
-        </div>
-      </div>
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-card px-2">
-        <Highlighter className="text-muted-foreground" />
-        <ToggleGroup
-          aria-label="Highlight color"
-          selectionMode="single"
-          selectedKeys={[color]}
-          onSelectionChange={onColorSelection}
-          size="sm"
-          variant="outline"
-        >
-          {HIGHLIGHT_COLORS.map((item) => (
-            <ToggleGroupItem
-              key={item.id}
-              aria-label={item.label}
-              id={item.id}
-              className="px-1.5"
+          <FolioTip label="Next page">
+            <Button
+              aria-label="Next page"
+              size="icon-sm"
+              variant="ghost"
+              isDisabled={currentPage >= pageCount}
+              onPress={() => scrollToPage(Math.min(pageCount, currentPage + 1))}
             >
-              <span
-                className="block size-3 rounded-sm ring-1 ring-foreground/20"
-                style={{ backgroundColor: item.id }}
-              />
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+              <ChevronRight />
+            </Button>
+          </FolioTip>
+          <Separator orientation="vertical" className="mx-1 h-5" />
+          <FolioTip label="Zoom out">
+            <Button
+              aria-label="Zoom out"
+              size="icon-sm"
+              variant="ghost"
+              isDisabled={scale <= MIN_SCALE}
+              onPress={() =>
+                setScale((current) => Math.max(MIN_SCALE, current - SCALE_STEP))
+              }
+            >
+              <Minus />
+            </Button>
+          </FolioTip>
+          <FolioTip label="Fit width">
+            <Button
+              aria-label="Fit width"
+              size="icon-sm"
+              variant="ghost"
+              onPress={() => setScale(fitWidthScale)}
+            >
+              <Scan />
+            </Button>
+          </FolioTip>
+          <FolioTip label="Zoom in">
+            <Button
+              aria-label="Zoom in"
+              size="icon-sm"
+              variant="ghost"
+              isDisabled={scale >= MAX_SCALE}
+              onPress={() =>
+                setScale((current) => Math.min(MAX_SCALE, current + SCALE_STEP))
+              }
+            >
+              <Plus />
+            </Button>
+          </FolioTip>
+          {onHide ? (
+            <FolioTip label="Hide PDF">
+              <Button
+                aria-label="Hide PDF"
+                size="icon-sm"
+                variant="ghost"
+                onPress={onHide}
+              >
+                <PanelLeftClose />
+              </Button>
+            </FolioTip>
+          ) : null}
+        </div>
       </div>
       <div
         ref={scrollerRef}
-        className="min-h-0 flex-1 overflow-auto bg-muted/40 p-3"
+        className="min-h-0 flex-1 overflow-auto bg-muted p-3"
       >
         <div className="flex flex-col gap-3">
           {metrics.map((page, index) => {
@@ -299,14 +270,8 @@ export function PdfViewer({
                 metrics={page}
                 scale={scale}
                 paint={shouldPaint}
-                annotations={annotations.filter(
-                  (item) => item.selection.pageNumber === pageNumber,
-                )}
-                activeId={activeId}
                 pageEls={pageEls.current}
                 onVisible={onPageVisible}
-                onCreateFromSelection={onCreateFromSelection}
-                onActivate={onActiveIdChange}
               />
             )
           })}
@@ -322,30 +287,22 @@ function PdfPage({
   metrics,
   scale,
   paint,
-  annotations,
-  activeId,
   pageEls,
   onVisible,
-  onCreateFromSelection,
-  onActivate,
 }: {
   pdf: PDFDocumentProxy
   pageNumber: number
   metrics: PageMetrics
   scale: number
   paint: boolean
-  annotations: Array<AnnotationResponse>
-  activeId: string | null
   pageEls: Map<number, HTMLElement>
   onVisible: (pageNumber: number, ratio: number) => void
-  onCreateFromSelection: (selection: AnnotationSelection) => void
-  onActivate: (id: string | null) => void
 }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const textLayerRef = useRef<HTMLDivElement>(null)
   const onVisibleRef = useRef(onVisible)
-  const [viewport, setViewport] = useState<PageViewport | null>(null)
+  const cancelledRef = useRef(false)
   onVisibleRef.current = onVisible
 
   useEffect(() => {
@@ -358,58 +315,61 @@ function PdfPage({
     )
     observer.observe(el)
 
-    function clearSelecting() {
-      textLayerRef.current?.classList.remove('selecting')
-    }
-    window.addEventListener('mouseup', clearSelecting)
-
     return () => {
       observer.disconnect()
       pageEls.delete(pageNumber)
-      window.removeEventListener('mouseup', clearSelecting)
     }
   }, [pageEls, pageNumber])
 
   useEffect(() => {
     if (!paint) return
+    cancelledRef.current = false
     const canvas = canvasRef.current
     const textLayerEl = textLayerRef.current
     if (!canvas || !textLayerEl) return
 
-    let cancelled = false
     let renderTask: RenderTask | null = null
     let page: PDFPageProxy | null = null
+    const isCancelled = () => cancelledRef.current
 
     async function renderPage() {
       page = await pdf.getPage(pageNumber)
-      if (cancelled || !canvas || !textLayerEl) return
+      if (cancelledRef.current || !canvas || !textLayerEl) return
 
       const nextViewport = page.getViewport({ scale })
-      setViewport(nextViewport)
 
-      const outputScale = window.devicePixelRatio || 1
-      canvas.width = Math.floor(nextViewport.width * outputScale)
-      canvas.height = Math.floor(nextViewport.height * outputScale)
+      const preferredOutputScale = Math.max(
+        MIN_OUTPUT_SCALE,
+        window.devicePixelRatio || 1,
+      )
+      const pixelBudgetScale = Math.sqrt(
+        MAX_CANVAS_PIXELS / (nextViewport.width * nextViewport.height),
+      )
+      const outputScale = Math.max(
+        1,
+        Math.min(preferredOutputScale, pixelBudgetScale),
+      )
+      canvas.width = Math.ceil(nextViewport.width * outputScale)
+      canvas.height = Math.ceil(nextViewport.height * outputScale)
       canvas.style.width = `${nextViewport.width}px`
       canvas.style.height = `${nextViewport.height}px`
 
       const context = canvas.getContext('2d')
       if (!context) return
 
+      const scaleX = canvas.width / nextViewport.width
+      const scaleY = canvas.height / nextViewport.height
       renderTask = page.render({
         canvas,
         viewport: nextViewport,
-        transform:
-          outputScale === 1
-            ? undefined
-            : [outputScale, 0, 0, outputScale, 0, 0],
+        transform: [scaleX, 0, 0, scaleY, 0, 0],
       })
       try {
         await renderTask.promise
       } catch {
-        if (cancelled) return
+        if (isCancelled()) return
       }
-      if (cancelled) return
+      if (isCancelled()) return
 
       textLayerEl.replaceChildren()
       textLayerEl.style.width = `${nextViewport.width}px`
@@ -426,54 +386,10 @@ function PdfPage({
     void renderPage()
 
     return () => {
-      cancelled = true
+      cancelledRef.current = true
       renderTask?.cancel()
     }
   }, [paint, pdf, pageNumber, scale])
-
-  function handleMouseDown() {
-    textLayerRef.current?.classList.add('selecting')
-  }
-
-  function handleMouseUp(event: MouseEvent<HTMLDivElement>) {
-    const pageEl = wrapRef.current
-    const textLayerEl = textLayerRef.current
-    textLayerEl?.classList.remove('selecting')
-    if (!pageEl || !viewport) return
-
-    const selection = window.getSelection()
-    if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
-      const range = selection.getRangeAt(0)
-      if (
-        textLayerEl?.contains(range.commonAncestorContainer) ||
-        pageEl.contains(range.commonAncestorContainer)
-      ) {
-        const payload = clientRectsToSelection(
-          range,
-          pageEl,
-          viewport,
-          pageNumber,
-        )
-        if (payload) {
-          selection.removeAllRanges()
-          onCreateFromSelection(payload)
-          return
-        }
-      }
-    }
-
-    const box = pageEl.getBoundingClientRect()
-    const [pdfX, pdfY] = viewport.convertToPdfPoint(
-      event.clientX - box.left,
-      event.clientY - box.top,
-    )
-    const hit = annotations.find((annotation) =>
-      annotation.selection.rects.some((rect) =>
-        pointInPdfRect(pdfX, pdfY, rect),
-      ),
-    )
-    onActivate(hit?.uid ?? null)
-  }
 
   return (
     <div
@@ -483,17 +399,8 @@ function PdfPage({
         width: metrics.width * scale,
         height: metrics.height * scale,
       }}
-      onMouseDown={handleMouseDown}
-      onMouseUp={handleMouseUp}
     >
       {paint ? <canvas ref={canvasRef} /> : null}
-      {paint && viewport ? (
-        <PdfHighlightLayer
-          annotations={annotations}
-          viewport={viewport}
-          activeId={activeId}
-        />
-      ) : null}
       <div ref={textLayerRef} className="textLayer" />
     </div>
   )

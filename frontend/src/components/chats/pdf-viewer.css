@@ -45,18 +45,6 @@
   user-select: none;
 }
 
-.pdf-page .textLayer.selecting .endOfContent {
-  top: 0;
-}
-
 .pdf-page .textLayer ::selection {
   background: color-mix(in oklch, var(--primary) 28%, transparent);
-}
-
-.pdf-page .highlight-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  user-select: none;
 }
