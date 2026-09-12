@@ -4,7 +4,7 @@ Monorepo containing the frontend and backend for Inquiro.
 
 ## Structure
 
-- `frontend/` — React/Vite frontend
+- `frontend/` — Tanstack Start, React/Vite frontend
 - `backend/` — FastAPI backend
 
 ## Getting Started
