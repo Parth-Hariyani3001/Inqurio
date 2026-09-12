@@ -13,3 +13,7 @@ Thumbs.db
 
 # Misc
 *.log
+
+# Excluded dirs
+scripts/
+xml parsing/
