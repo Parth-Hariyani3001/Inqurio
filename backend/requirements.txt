@@ -13,8 +13,13 @@ flower
 requests
 qdrant-client 
 openai
+langchain
+langchain-core
+langgraph
 langchain-text-splitters 
 langchain-qdrant 
 langchain-openai
+langchain-tavily
+sse-starlette
 debugpy
 asgiref

@@ -41,7 +41,7 @@ export const Route = createFileRoute('/dashboard/chats/$sessionId')({
     }
   },
   pendingComponent: ChatSessionPending,
-  pendingMs: 400,
+  pendingMs: 0,
   errorComponent: ChatSessionError,
   notFoundComponent: ChatSessionNotFound,
   component: RouteComponent,
@@ -57,7 +57,7 @@ function RouteComponent() {
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-      <ChatWorkspace session={sessionQuery.data} />
+      <ChatWorkspace key={sessionId} session={sessionQuery.data} />
     </div>
   )
 }

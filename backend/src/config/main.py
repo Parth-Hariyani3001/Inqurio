@@ -15,8 +15,11 @@ class Settings(BaseSettings):
     open_alex_key: str = ""
     grobid_url: str = "http://localhost:8070/"
     embedding_model: str = ""
+    chat_model: str = "google/gemma-4-12b-qat"
     ai_api_key: str = ""
     ai_base_url: str = ""
+    tavily_api_key: str = ""
+    rag_top_k: int = 6
     qdrant_url: str = "http://localhost:6333"
     cors_origins: list[str] = [
         "http://localhost:3000",

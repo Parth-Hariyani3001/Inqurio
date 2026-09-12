@@ -1,13 +1,17 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.db.models import ChatRole
 
 
 class SessionCreatePayload(BaseModel):
     paper_id: UUID
+
+
+class SessionUpdatePayload(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
 
 
 class SessionResponse(BaseModel):
@@ -23,6 +27,10 @@ class SessionListItem(BaseModel):
     paper_id: UUID
     paper_title: str
     created_at: datetime
+
+
+class MessageCreatePayload(BaseModel):
+    content: str = Field(min_length=1, max_length=8000)
 
 
 class MessageResponse(BaseModel):

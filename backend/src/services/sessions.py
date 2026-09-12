@@ -4,7 +4,7 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from src.db.models import Chat, Message, Paper, Status
-from src.errors.exceptions import NotFoundError, PaperNotReadyError
+from src.errors.exceptions import BadRequestError, NotFoundError, PaperNotReadyError
 from src.schemas.sessions import (
     MessageResponse,
     SessionDetailResponse,
@@ -19,6 +19,22 @@ class SessionService:
     def __init__(self):
         self.paper_service = PaperService()
         self.user_paper_service = UserPaperService()
+
+    async def _get_chat_for_user(
+        self,
+        session_id: UUID,
+        user_id: UUID,
+        session: AsyncSession,
+    ) -> Chat:
+        statement = select(Chat).where(
+            col(Chat.uid) == session_id,
+            col(Chat.user_id) == user_id,
+        )
+        result = await session.exec(statement)
+        chat = result.first()
+        if not chat:
+            raise NotFoundError(message="Session not found")
+        return chat
 
     async def create_session(
         self,
@@ -94,14 +110,7 @@ class SessionService:
         user_id: UUID,
         session: AsyncSession,
     ) -> SessionDetailResponse:
-        statement = select(Chat).where(
-            col(Chat.uid) == session_id,
-            col(Chat.user_id) == user_id,
-        )
-        result = await session.exec(statement)
-        chat = result.first()
-        if not chat:
-            raise NotFoundError(message="Session not found")
+        chat = await self._get_chat_for_user(session_id, user_id, session)
 
         messages_statement = (
             select(Message)
@@ -127,3 +136,37 @@ class SessionService:
                 for message in messages
             ],
         )
+
+    async def update_title(
+        self,
+        session_id: UUID,
+        user_id: UUID,
+        title: str,
+        session: AsyncSession,
+    ) -> SessionResponse:
+        cleaned = title.strip()
+        if not cleaned:
+            raise BadRequestError(message="Title cannot be empty")
+
+        chat = await self._get_chat_for_user(session_id, user_id, session)
+        chat.title = cleaned
+        session.add(chat)
+        await session.commit()
+        await session.refresh(chat)
+
+        return SessionResponse(
+            uid=chat.uid,
+            title=chat.title,
+            paper_id=chat.paper_id,
+            created_at=chat.created_at,
+        )
+
+    async def delete_session(
+        self,
+        session_id: UUID,
+        user_id: UUID,
+        session: AsyncSession,
+    ) -> None:
+        chat = await self._get_chat_for_user(session_id, user_id, session)
+        await session.delete(chat)
+        await session.commit()

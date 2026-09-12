@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { createFileRoute, Outlet, useRouterState } from '@tanstack/react-router'
 
 import { AppSidebar } from '#/components/app-sidebar.tsx'
+import { SessionActions } from '#/components/chats/session-actions.tsx'
 import { ModeToggle } from '#/components/mode-toggle.tsx'
 import { Separator } from '#/components/ui/separator.tsx'
 import {
@@ -9,12 +10,14 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from '#/components/ui/sidebar.tsx'
+import { Spinner } from '@/components/ui/spinner'
 import { requireAuth } from '#/lib/auth.ts'
 import { meQueryOptions } from '#/lib/me.ts'
 import { sessionDetailQueryOptions } from '#/lib/sessions.ts'
 
 export const Route = createFileRoute('/dashboard')({
   component: RouteComponent,
+  staleTime: 60_000,
   beforeLoad: async ({ context }) => {
     const session = await requireAuth()
     await context.queryClient.ensureQueryData(meQueryOptions())
@@ -59,8 +62,16 @@ function dashboardTitle(
 }
 
 function RouteComponent() {
-  const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const search = useRouterState({ select: (s) => s.location.search })
+  const { pathname, search, isLoading } = useRouterState({
+    select: (s) => {
+      const committed = s.resolvedLocation ?? s.location
+      return {
+        pathname: committed.pathname,
+        search: committed.search,
+        isLoading: s.isLoading,
+      }
+    },
+  })
   const sessionId = pathname.match(/^\/dashboard\/chats\/([^/]+)\/?$/)?.[1]
   const sessionQuery = useQuery({
     ...sessionDetailQueryOptions(sessionId ?? ''),
@@ -75,7 +86,18 @@ function RouteComponent() {
         <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4">
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-full" />
-          <h1 className="truncate font-serif text-sm tracking-tight">{title}</h1>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <h1 className="min-w-0 truncate font-serif text-sm tracking-tight">
+              {title}
+            </h1>
+            {isLoading ? <Spinner /> : null}
+          </div>
+          {sessionId && sessionQuery.data ? (
+            <SessionActions
+              sessionId={sessionId}
+              title={sessionQuery.data.title}
+            />
+          ) : null}
           <div className="ml-auto">
             <ModeToggle />
           </div>

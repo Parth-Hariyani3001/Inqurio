@@ -171,7 +171,7 @@ export function PdfViewer({
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="flex h-11 min-w-0 shrink-0 items-center gap-2 border-b border-border bg-card px-2">
+      <div className="flex h-11 min-w-0 shrink-0 items-center gap-2 border-b border-border bg-card px-3">
         <p className="min-w-0 flex-1 truncate font-serif text-sm tracking-tight">
           {title ?? 'Paper'}
         </p>

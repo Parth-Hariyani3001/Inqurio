@@ -40,7 +40,7 @@ export const Route = createFileRoute('/dashboard/explore/$workId')({
     }
   },
   pendingComponent: WorkDetailPending,
-  pendingMs: 400,
+  pendingMs: 0,
   errorComponent: WorkDetailError,
   notFoundComponent: WorkDetailNotFound,
   component: RouteComponent,

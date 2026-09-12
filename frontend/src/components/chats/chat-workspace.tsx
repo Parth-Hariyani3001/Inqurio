@@ -39,7 +39,7 @@ export function ChatWorkspace({ session }: { session: SessionDetailResponse }) {
             setMobileTab(nextTab)
           }}
         >
-          <div className="shrink-0 border-b border-border px-3 py-2">
+          <div className="shrink-0 border-b border-border bg-card px-3 py-2">
             <TabsList className="w-full">
               <TabsTrigger id="paper">
                 <FileText data-icon="inline-start" />
@@ -66,6 +66,7 @@ export function ChatWorkspace({ session }: { session: SessionDetailResponse }) {
             id="chat"
           >
             <SessionChat
+              sessionId={session.uid}
               messages={session.messages}
               onShowPdf={!pdfVisible ? showPdf : undefined}
             />
@@ -99,6 +100,7 @@ export function ChatWorkspace({ session }: { session: SessionDetailResponse }) {
             minSize={pdfVisible ? '24%' : '100%'}
           >
             <SessionChat
+              sessionId={session.uid}
               messages={session.messages}
               onShowPdf={!pdfVisible ? showPdf : undefined}
             />
