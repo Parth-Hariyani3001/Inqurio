@@ -2,16 +2,23 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 from uuid import UUID
 
 from langchain_core.tools import BaseTool, tool
 from langchain_tavily import TavilySearch
 
 from src.config.main import Config
-from src.rag.retrieval import search_paper_chunks
+from src.rag.retrieval import normalize_retrieval_query, search_paper_chunks
 
 
-def build_retrieve_paper_tool(paper_id: UUID) -> BaseTool:
+def build_retrieve_paper_tool(
+    paper_id: UUID,
+    *,
+    retrieval_cache: dict[str, list[dict[str, Any]]] | None = None,
+) -> BaseTool:
+    cache = retrieval_cache if retrieval_cache is not None else {}
+
     @tool("retrieve_paper_context")
     async def retrieve_paper_context(query: str) -> str:
         """Search the attached research paper for passages relevant to the query.
@@ -19,7 +26,13 @@ def build_retrieve_paper_tool(paper_id: UUID) -> BaseTool:
         Always use this before answering when the provided paper context is insufficient.
         Prefer paper passages over general knowledge. If nothing matches, say so.
         """
-        hits = await search_paper_chunks(paper_id, query)
+        cache_key = normalize_retrieval_query(query)
+        if cache_key in cache:
+            hits = cache[cache_key]
+        else:
+            hits = await search_paper_chunks(paper_id, query)
+            cache[cache_key] = hits
+
         if not hits:
             return json.dumps(
                 {
@@ -58,8 +71,14 @@ def build_web_search_tool() -> BaseTool | None:
     return search_paper_background
 
 
-def build_agent_tools(paper_id: UUID) -> list[BaseTool]:
-    tools: list[BaseTool] = [build_retrieve_paper_tool(paper_id)]
+def build_agent_tools(
+    paper_id: UUID,
+    *,
+    retrieval_cache: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[BaseTool]:
+    tools: list[BaseTool] = [
+        build_retrieve_paper_tool(paper_id, retrieval_cache=retrieval_cache)
+    ]
     web_tool = build_web_search_tool()
     if web_tool is not None:
         tools.append(web_tool)

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .config.logging import configure_logging
 from .config.main import Config
 from .errors import register_error_handlers
 from .routers.webhooks import webhook_router
@@ -9,6 +10,8 @@ from .routers.sessions import sessions_router
 from .routers.user_papers import user_papers_router
 from .routers.users import users_router
 from .routers.openalex import open_alex_router
+
+configure_logging()
 
 version = "v1"
 app = FastAPI(

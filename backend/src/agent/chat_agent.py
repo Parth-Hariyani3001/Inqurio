@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -23,8 +24,13 @@ def build_chat_model() -> ChatOpenAI:
     )
 
 
-def build_chat_agent(paper_id: UUID, paper_title: str):
-    tools = build_agent_tools(paper_id)
+def build_chat_agent(
+    paper_id: UUID,
+    paper_title: str,
+    *,
+    retrieval_cache: dict[str, list[dict[str, Any]]] | None = None,
+):
+    tools = build_agent_tools(paper_id, retrieval_cache=retrieval_cache)
     model = build_chat_model()
     return create_react_agent(
         model,

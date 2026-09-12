@@ -1,23 +1,54 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from typing import Any
+from urllib.parse import urlparse
 
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from src.config.main import Config
 
+logger = logging.getLogger(__name__)
 
-def _build_rerank_model() -> ChatOpenAI:
-    return ChatOpenAI(
-        model=Config.chat_model or "gpt-4o-mini",
-        api_key=SecretStr(Config.ai_api_key),
-        base_url=Config.ai_base_url or None,
-        temperature=0,
-        streaming=False,
-    )
+_rerank_model: ChatOpenAI | None = None
+
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+_LOCAL_MODEL_MARKERS = ("gemma", "llama", "qwen", "mistral", "phi", "qat")
+
+
+def _is_local_chat_model(
+    *,
+    chat_model: str | None = None,
+    ai_base_url: str | None = None,
+) -> bool:
+    """True for loopback OpenAI-compatible servers or self-hosted model names."""
+    base_url = ai_base_url if ai_base_url is not None else Config.ai_base_url
+    host = (urlparse(base_url or "").hostname or "").lower()
+    if host in _LOOPBACK_HOSTS:
+        return True
+
+    model = (chat_model if chat_model is not None else Config.chat_model or "").lower()
+    if "gpt-" in model:
+        return False
+    return any(marker in model for marker in _LOCAL_MODEL_MARKERS)
+
+
+def _get_rerank_model() -> ChatOpenAI:
+    global _rerank_model
+    if _rerank_model is None:
+        _rerank_model = ChatOpenAI(
+            model=Config.chat_model or "gpt-4o-mini",
+            api_key=SecretStr(Config.ai_api_key),
+            base_url=Config.ai_base_url or None,
+            temperature=0,
+            max_tokens=256,
+            streaming=False,
+        )
+    return _rerank_model
 
 
 def _parse_ranked_ids(raw: str, allowed: set[str]) -> list[str]:
@@ -60,6 +91,12 @@ async def rerank_hits(
     if not hits or not Config.rag_rerank_enabled or len(hits) <= 1:
         return hits[:top_k]
 
+    if _is_local_chat_model():
+        logger.info("rag.rerank skipped reason=local_model")
+        return hits[:top_k]
+
+    hits = hits[: Config.rag_rerank_max_candidates]
+
     by_id = {str(hit["chunk_id"]): hit for hit in hits if hit.get("chunk_id")}
     if len(by_id) <= 1:
         return hits[:top_k]
@@ -85,8 +122,14 @@ async def rerank_hits(
     )
 
     try:
-        model = _build_rerank_model()
+        model = _get_rerank_model()
+        started = time.perf_counter()
         response = await model.ainvoke(prompt)
+        logger.info(
+            "rag.rerank elapsed_ms=%.1f candidates=%d",
+            (time.perf_counter() - started) * 1000,
+            len(hits),
+        )
         content = response.content
         if isinstance(content, list):
             text = "".join(

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
@@ -13,11 +16,14 @@ from src.agent.chat_agent import build_chat_agent, history_to_langchain_messages
 from src.agent.guardrails import build_grounded_user_message
 from src.db.models import ChatRole, Message
 from src.errors.exceptions import BadRequestError
-from src.rag.query_rewrite import rewrite_retrieval_query
-from src.rag.retrieval import search_paper_chunks
+from src.rag.embeddings import embed_query_cached
+from src.rag.query_rewrite import rewrite_retrieval_query, will_rewrite_retrieval_query
+from src.rag.retrieval import normalize_retrieval_query, search_paper_chunks
 from src.schemas.sessions import MessageResponse
 from src.services.papers import PaperService
 from src.services.sessions import SessionService
+
+logger = logging.getLogger(__name__)
 
 
 def _message_response(message: Message) -> dict[str, Any]:
@@ -199,21 +205,70 @@ class ChatService:
         prior = [message for message in history if message.uid != user_message.uid]
         lc_messages = history_to_langchain_messages(prior)
 
+        turn_started = time.perf_counter()
+        rewrite_started = time.perf_counter()
+        speculative_embed: asyncio.Task[list[float]] | None = None
+        if will_rewrite_retrieval_query(cleaned, history=lc_messages):
+            speculative_embed = asyncio.create_task(
+                asyncio.to_thread(embed_query_cached, cleaned)
+            )
+
         retrieval_query = await rewrite_retrieval_query(
             cleaned,
             history=lc_messages,
             paper_title=paper_title,
         )
-        paper_hits = await search_paper_chunks(chat.paper_id, retrieval_query)
+        rewrite_ms = (time.perf_counter() - rewrite_started) * 1000
+
+        query_vector: list[float] | None = None
+        if speculative_embed is not None:
+            if normalize_retrieval_query(retrieval_query) == normalize_retrieval_query(
+                cleaned
+            ):
+                try:
+                    query_vector = await speculative_embed
+                except Exception:
+                    logger.exception("chat.speculative_embed failed; falling back")
+                    query_vector = None
+            else:
+                speculative_embed.cancel()
+                try:
+                    await speculative_embed
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+        retrieval_cache: dict[str, list[dict[str, Any]]] = {}
+        retrieval_started = time.perf_counter()
+        paper_hits = await search_paper_chunks(
+            chat.paper_id,
+            retrieval_query,
+            query_vector=query_vector,
+        )
+        search_ms = (time.perf_counter() - retrieval_started) * 1000
+        logger.info(
+            "chat.prestream_rag rewrite_ms=%.1f search_ms=%.1f total_ms=%.1f hits=%d"
+            " speculative=%s",
+            rewrite_ms,
+            search_ms,
+            rewrite_ms + search_ms,
+            len(paper_hits),
+            "reused" if query_vector is not None else "none",
+        )
+        retrieval_cache[normalize_retrieval_query(retrieval_query)] = paper_hits
         lc_messages.append(
             HumanMessage(content=build_grounded_user_message(
                 cleaned, paper_hits))
         )
 
-        agent = build_chat_agent(chat.paper_id, paper_title)
+        agent = build_chat_agent(
+            chat.paper_id,
+            paper_title,
+            retrieval_cache=retrieval_cache,
+        )
         citations: dict[str, list[dict[str, Any]]] = {"paper": [], "web": []}
         _merge_paper_citations(citations["paper"], {"paper": paper_hits})
         assistant_parts: list[str] = []
+        ttft_ms: float | None = None
 
         try:
             async for event in agent.astream_events(
@@ -227,6 +282,14 @@ class ChatService:
                     if not text:
                         continue
 
+                    if ttft_ms is None:
+                        ttft_ms = (time.perf_counter() - turn_started) * 1000
+                        logger.info(
+                            "chat.turn rewrite_ms=%.1f search_ms=%.1f ttft_ms=%.1f",
+                            rewrite_ms,
+                            search_ms,
+                            ttft_ms,
+                        )
                     assistant_parts.append(text)
                     yield ("message.assistant.delta", {"delta": text})
 
@@ -239,6 +302,13 @@ class ChatService:
                     _ingest_tool_output(citations, tool_name, tool_output)
 
         except Exception as exc:
+            if ttft_ms is None:
+                logger.info(
+                    "chat.turn rewrite_ms=%.1f search_ms=%.1f ttft_ms=%.1f",
+                    rewrite_ms,
+                    search_ms,
+                    (time.perf_counter() - turn_started) * 1000,
+                )
             yield (
                 "error",
                 {
@@ -246,6 +316,14 @@ class ChatService:
                 },
             )
             return
+
+        if ttft_ms is None:
+            logger.info(
+                "chat.turn rewrite_ms=%.1f search_ms=%.1f ttft_ms=%.1f",
+                rewrite_ms,
+                search_ms,
+                (time.perf_counter() - turn_started) * 1000,
+            )
 
         assistant_text = "".join(assistant_parts).strip()
         if not assistant_text:

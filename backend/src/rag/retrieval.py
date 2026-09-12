@@ -1,18 +1,27 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from collections import defaultdict
 from uuid import UUID
 
 from qdrant_client.http.models import FieldCondition, Filter, MatchValue
-from sqlalchemy import func, literal_column
+from sqlalchemy import and_, func, literal_column, or_
 from sqlmodel import col, select
 
 from src.config.main import Config
 from src.db.main import SessionLocal
 from src.db.models import Chunk, Section
-from src.rag.embeddings import embeddings
+from src.rag.embeddings import embed_query_cached
 from src.rag.rerank import rerank_hits
 from src.rag.vector_store import collection_name, vector_store
+
+logger = logging.getLogger(__name__)
+
+
+def normalize_retrieval_query(query: str) -> str:
+    return " ".join((query or "").split()).lower()
 
 
 def reciprocal_rank_fusion(
@@ -24,6 +33,7 @@ def reciprocal_rank_fusion(
     for ranking in rankings:
         for rank, chunk_id in enumerate(ranking):
             scores[chunk_id] += 1.0 / (rrf_k + rank + 1)
+
     return dict(scores)
 
 
@@ -32,9 +42,19 @@ async def _dense_search(
     query: str,
     *,
     limit: int,
+    query_vector: list[float] | None = None,
 ) -> list[tuple[UUID, float]]:
-    query_vector = embeddings.embed_query(query)
-    response = vector_store.client.query_points(
+    started = time.perf_counter()
+    if query_vector is None:
+        query_vector = await asyncio.to_thread(embed_query_cached, query)
+        embed_ms = (time.perf_counter() - started) * 1000
+        logger.info("rag.dense.embed elapsed_ms=%.1f source=embed", embed_ms)
+    else:
+        logger.info("rag.dense.embed elapsed_ms=0.0 source=precomputed")
+
+    qdrant_started = time.perf_counter()
+    response = await asyncio.to_thread(
+        vector_store.client.query_points,
         collection_name=collection_name,
         query=query_vector,
         query_filter=Filter(
@@ -56,6 +76,11 @@ async def _dense_search(
         except ValueError:
             continue
         results.append((chunk_id, float(point.score or 0.0)))
+    logger.info(
+        "rag.dense.qdrant elapsed_ms=%.1f hits=%d",
+        (time.perf_counter() - qdrant_started) * 1000,
+        len(results),
+    )
     return results
 
 
@@ -70,6 +95,7 @@ async def _keyword_search(
     if not cleaned:
         return []
 
+    started = time.perf_counter()
     ts_query = func.plainto_tsquery("english", cleaned)
     document = func.to_tsvector(
         "english",
@@ -89,7 +115,13 @@ async def _keyword_search(
         result = await session.exec(statement)
         rows = result.all()
 
-    return [(chunk_id, float(score or 0.0)) for chunk_id, score in rows]
+    results = [(chunk_id, float(score or 0.0)) for chunk_id, score in rows]
+    logger.info(
+        "rag.keyword elapsed_ms=%.1f hits=%d",
+        (time.perf_counter() - started) * 1000,
+        len(results),
+    )
+    return results
 
 
 async def _hydrate_chunks(
@@ -99,6 +131,7 @@ async def _hydrate_chunks(
     if not chunk_ids:
         return []
 
+    started = time.perf_counter()
     async with SessionLocal() as session:
         statement = (
             select(Chunk, Section)
@@ -126,6 +159,11 @@ async def _hydrate_chunks(
                 "score": scores.get(chunk_id, 0.0),
             }
         )
+    logger.info(
+        "rag.hydrate elapsed_ms=%.1f chunks=%d",
+        (time.perf_counter() - started) * 1000,
+        len(hits),
+    )
     return hits
 
 
@@ -133,40 +171,68 @@ async def _expand_neighbors(hits: list[dict], *, window: int) -> list[dict]:
     if window <= 0 or not hits:
         return hits
 
-    paper_id = hits[0]["paper_id"]
-    needed: set[tuple[str, int]] = set()
+    started = time.perf_counter()
+
+    existing = {hit["chunk_id"] for hit in hits}
+    neighbor_scores: dict[tuple[str, int], float] = {}
+
     for hit in hits:
         section_id = hit.get("section_id")
         index = hit.get("chunk_index")
         if section_id is None or index is None:
             continue
+
+        parent_score = float(hit.get("score") or 0.0)
+        section_key = str(section_id)
+        base_index = int(index)
         for offset in range(-window, window + 1):
-            needed.add((str(section_id), int(index) + offset))
+            if offset == 0:
+                continue
+            neighbor_key = (section_key, base_index + offset)
+            inherited = parent_score * 0.9
+            neighbor_scores[neighbor_key] = max(
+                neighbor_scores.get(neighbor_key, 0.0),
+                inherited,
+            )
+
+    present_positions = {
+        (str(hit.get("section_id")), int(hit.get("chunk_index")))
+        for hit in hits
+        if hit.get("section_id") is not None and hit.get("chunk_index") is not None
+    }
+    needed_neighbors = {
+        key for key in neighbor_scores if key not in present_positions
+    }
+    if not needed_neighbors:
+        logger.info(
+            "rag.expand elapsed_ms=%.1f added=0",
+            (time.perf_counter() - started) * 1000,
+        )
+        return hits
+
+    conditions = [
+        and_(
+            col(Chunk.section_id) == UUID(section_id),
+            col(Chunk.chunk_index) == chunk_index,
+        )
+        for section_id, chunk_index in needed_neighbors
+    ]
 
     async with SessionLocal() as session:
         statement = (
             select(Chunk, Section)
             .join(Section, col(Chunk.section_id) == Section.uid)
-            .where(col(Chunk.paper_id) == UUID(str(paper_id)))
+            .where(or_(*conditions))
         )
         result = await session.exec(statement)
         rows = result.all()
 
-    by_key = {
-        (str(chunk.section_id), chunk.chunk_index): (chunk, section)
-        for chunk, section in rows
-    }
-    existing = {hit["chunk_id"] for hit in hits}
     expanded = list(hits)
-
-    for section_id, chunk_index in sorted(needed, key=lambda item: (item[0], item[1])):
-        row = by_key.get((section_id, chunk_index))
-        if not row:
-            continue
-        chunk, section = row
+    for chunk, section in rows:
         chunk_id = str(chunk.uid)
         if chunk_id in existing:
             continue
+        position = (str(chunk.section_id), chunk.chunk_index)
         expanded.append(
             {
                 "chunk_id": chunk_id,
@@ -175,11 +241,16 @@ async def _expand_neighbors(hits: list[dict], *, window: int) -> list[dict]:
                 "chunk_index": chunk.chunk_index,
                 "section": section.title,
                 "excerpt": chunk.content,
-                "score": 0.0,
+                "score": neighbor_scores.get(position, 0.0),
             }
         )
         existing.add(chunk_id)
 
+    logger.info(
+        "rag.expand elapsed_ms=%.1f added=%d",
+        (time.perf_counter() - started) * 1000,
+        len(expanded) - len(hits),
+    )
     return expanded
 
 
@@ -208,22 +279,73 @@ def _strip_internal_fields(hits: list[dict]) -> list[dict]:
     ]
 
 
+def _prefilter_hits(
+    hits: list[dict],
+    *,
+    keyword_ids: list[UUID],
+    final_k: int,
+) -> list[dict]:
+    if Config.rag_min_score <= 0:
+        return hits
+
+    keyword_keep = {str(chunk_id) for chunk_id in keyword_ids[:final_k]}
+    filtered = [
+        hit
+        for hit in hits
+        if float(hit.get("score") or 0.0) >= Config.rag_min_score
+        or hit.get("chunk_id") in keyword_keep
+    ]
+    return filtered if filtered else hits
+
+
+def _apply_rerank_threshold(ranked: list[dict]) -> list[dict]:
+    if Config.rag_min_score <= 0 or not Config.rag_rerank_enabled:
+        return ranked
+
+    thresholded = [
+        hit
+        for hit in ranked
+        if float(hit.get("score") or 0.0) >= Config.rag_min_score
+    ]
+    if thresholded:
+        return thresholded
+    if ranked:
+        return ranked[: min(3, len(ranked))]
+    return ranked
+
+
 async def search_paper_chunks(
     paper_id: UUID,
     query: str,
     *,
     top_k: int | None = None,
+    query_vector: list[float] | None = None,
 ) -> list[dict]:
-    """Hybrid dense + keyword retrieval with RRF, neighbor expansion, and rerank."""
+    """Hybrid dense + keyword retrieval with RRF, rerank, and neighbor expansion."""
     cleaned = " ".join((query or "").split())
     if not cleaned:
         return []
 
+    pipeline_started = time.perf_counter()
     final_k = top_k or Config.rag_top_k
     recall_k = Config.rag_candidate_k
+    max_context = Config.rag_max_context_chunks
+    # Cap LLM rerank input: prefer config, else ~2x top_k (min 12).
+    rerank_pool = min(
+        Config.rag_rerank_max_candidates,
+        max(Config.rag_top_k * 2, 12),
+        recall_k,
+    )
 
-    dense_hits = await _dense_search(paper_id, cleaned, limit=recall_k)
-    keyword_hits = await _keyword_search(paper_id, cleaned, limit=recall_k)
+    dense_hits, keyword_hits = await asyncio.gather(
+        _dense_search(
+            paper_id,
+            cleaned,
+            limit=recall_k,
+            query_vector=query_vector,
+        ),
+        _keyword_search(paper_id, cleaned, limit=recall_k),
+    )
 
     dense_ids = [chunk_id for chunk_id, _ in dense_hits]
     keyword_ids = [chunk_id for chunk_id, _ in keyword_hits]
@@ -233,6 +355,7 @@ async def search_paper_chunks(
         [dense_ids, keyword_ids],
         rrf_k=Config.rag_rrf_k,
     )
+
     if not fused_scores and dense_ids:
         fused_scores = {
             chunk_id: 1.0 / (Config.rag_rrf_k + rank + 1)
@@ -250,30 +373,26 @@ async def search_paper_chunks(
         for chunk_id in ordered_ids
     }
     hits = await _hydrate_chunks(ordered_ids, hydrate_scores)
-    hits = await _expand_neighbors(hits, window=Config.rag_neighbor_window)
-    hits = _dedupe_hits(hits)
+    hits = _prefilter_hits(hits, keyword_ids=keyword_ids, final_k=final_k)
 
-    if Config.rag_min_score > 0:
-        keyword_keep = {str(chunk_id) for chunk_id in keyword_ids[:final_k]}
-        filtered = [
-            hit
-            for hit in hits
-            if float(hit.get("score") or 0.0) >= Config.rag_min_score
-            or hit.get("chunk_id") in keyword_keep
-        ]
-        if filtered:
-            hits = filtered
+    rerank_candidates = hits[:rerank_pool]
+    ranked = await rerank_hits(cleaned, rerank_candidates, top_k=final_k)
+    ranked = _apply_rerank_threshold(ranked)
 
-    ranked = await rerank_hits(cleaned, hits, top_k=final_k)
-    if Config.rag_min_score > 0 and Config.rag_rerank_enabled:
-        thresholded = [
-            hit
-            for hit in ranked
-            if float(hit.get("score") or 0.0) >= Config.rag_min_score
-        ]
-        if thresholded:
-            ranked = thresholded
-        elif ranked:
-            ranked = ranked[: min(3, len(ranked))]
+    primaries = ranked[:final_k]
+    expanded = await _expand_neighbors(
+        primaries,
+        window=Config.rag_neighbor_window,
+    )
+    expanded = _dedupe_hits(expanded)
+    result = _strip_internal_fields(expanded[:max_context])
 
-    return _strip_internal_fields(ranked[:final_k])
+    logger.info(
+        "rag.search elapsed_ms=%.1f dense=%d keyword=%d rerank_in=%d out=%d",
+        (time.perf_counter() - pipeline_started) * 1000,
+        len(dense_hits),
+        len(keyword_hits),
+        len(rerank_candidates),
+        len(result),
+    )
+    return result

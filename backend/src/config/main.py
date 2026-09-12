@@ -16,16 +16,21 @@ class Settings(BaseSettings):
     grobid_url: str = "http://localhost:8070/"
     embedding_model: str = ""
     chat_model: str = "google/gemma-4-12b-qat"
+    rewrite_model: str = ""
     ai_api_key: str = ""
     ai_base_url: str = ""
+    rewrite_ai_base_url: str = ""
     tavily_api_key: str = ""
     rag_top_k: int = 8
-    rag_candidate_k: int = 30
+    rag_candidate_k: int = 20
     rag_min_score: float = 0.15
     rag_rrf_k: int = 60
     rag_neighbor_window: int = 1
     rag_rerank_enabled: bool = True
+    rag_rerank_max_candidates: int = 15
+    rag_max_context_chunks: int = 12
     rag_query_rewrite_enabled: bool = True
+    rag_embed_cache_size: int = 256
     qdrant_url: str = "http://localhost:6333"
     cors_origins: list[str] = [
         "http://localhost:3000",
