@@ -1,4 +1,5 @@
 import boto3
+from botocore.exceptions import ClientError
 
 from src.config.main import Config
 from fastapi import UploadFile, File
@@ -55,6 +56,7 @@ def get_pdf_url(object_key: str) -> dict[str, str | int]:
             "Bucket": bucket_name,
             "Key": object_key,
             "ResponseContentDisposition": "inline",
+            "ResponseContentType": "application/pdf",
         },
         ExpiresIn=PRESIGNED_URL_EXPIRES_IN,
     )
@@ -63,3 +65,16 @@ def get_pdf_url(object_key: str) -> dict[str, str | int]:
         "url": url,
         "expires_in": PRESIGNED_URL_EXPIRES_IN,
     }
+
+
+def get_pdf_object(object_key: str):
+    try:
+        return r2.get_object(
+            Bucket=bucket_name,
+            Key=object_key,
+        )
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code in ("NoSuchKey", "404", "NotFound"):
+            raise FileNotFoundError(object_key) from exc
+        raise

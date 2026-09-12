@@ -32,7 +32,7 @@ export function ChatWorkspace({ session }: { session: SessionDetailResponse }) {
             </TabsList>
           </div>
           <TabsContent className="flex min-h-0 flex-1 flex-col" id="paper">
-            <PdfFolio paperId={session.paper_id} />
+            <PdfFolio paperId={session.paper_id} title={session.title} />
           </TabsContent>
           <TabsContent className="flex min-h-0 flex-1 flex-col" id="chat">
             <SessionChat messages={session.messages} />
@@ -42,7 +42,7 @@ export function ChatWorkspace({ session }: { session: SessionDetailResponse }) {
       <div className="hidden min-h-0 flex-1 md:flex">
         <ResizablePanelGroup className="h-full min-h-0" orientation="horizontal">
           <ResizablePanel className="min-h-0" defaultSize="58%" minSize="30%">
-            <PdfFolio paperId={session.paper_id} />
+            <PdfFolio paperId={session.paper_id} title={session.title} />
           </ResizablePanel>
           <ResizableHandle withHandle />
           <ResizablePanel className="min-h-0" defaultSize="42%" minSize="24%">

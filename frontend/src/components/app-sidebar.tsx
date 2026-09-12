@@ -1,5 +1,11 @@
 import type { ComponentProps } from 'react'
-import { BookMarked, BrainCircuit, Compass, Library, MessageSquare } from 'lucide-react'
+import {
+  BookMarked,
+  BrainCircuit,
+  Compass,
+  Library,
+  MessageSquare,
+} from 'lucide-react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 
 import { RecentChats } from '#/components/chats/recent-chats.tsx'
@@ -35,8 +41,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
     search.src === 'library'
   const exploreActive =
     pathname.startsWith('/dashboard/explore') && !fromPapers && !fromLibrary
-  const libraryActive =
-    pathname.startsWith('/dashboard/library') || fromLibrary
+  const libraryActive = pathname.startsWith('/dashboard/library') || fromLibrary
   const papersActive = pathname.startsWith('/dashboard/papers') || fromPapers
   const chatsActive = pathname.startsWith('/dashboard/chats')
 

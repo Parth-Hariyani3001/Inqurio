@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config.main import Config
 from .errors import register_error_handlers
 from .routers.webhooks import webhook_router
+from .routers.annotations import annotations_router
 from .routers.papers import papers_router
 from .routers.sessions import sessions_router
 from .routers.user_papers import user_papers_router
@@ -34,6 +35,7 @@ async def health_check():
     return {'status': 'ok', 'version': version}
 
 app.include_router(papers_router, prefix=f'/api/{version}')
+app.include_router(annotations_router, prefix=f'/api/{version}')
 app.include_router(sessions_router, prefix=f'/api/{version}')
 app.include_router(user_papers_router, prefix=f'/api/{version}')
 app.include_router(users_router, prefix=f'/api/{version}')

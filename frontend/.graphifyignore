@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.tanstack/
+.output/
+.nitro/
+.wrangler/
+.vinxi/
+.output/
+__unconfig*
+*.local
+.git/

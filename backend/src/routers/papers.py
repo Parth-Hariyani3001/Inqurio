@@ -1,14 +1,14 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
-from src.schemas.papers import PaperCreatePayload, PaperResponse
+from src.schemas.papers import PaperCreatePayload, PaperPdfUrlResponse, PaperResponse
 from src.utils.clerk import validate_user_session
 from src.services.papers import PaperService, PaperNotFoundInOpenAlexError
 from src.services.users import UserService
 from src.db.main import get_session
-from src.utils.object_store import get_pdf_url
+from src.utils.object_store import get_pdf_object, get_pdf_url
 from src.errors.exceptions import NotFoundError
 from uuid import UUID
 
@@ -21,8 +21,46 @@ ClerkUserIdDep = Annotated[str, Depends(validate_user_session)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
+@papers_router.get('/{paper_id}/pdf')
+async def stream_paper_pdf(
+    paper_id: UUID,
+    clerk_user_id: ClerkUserIdDep,
+    session: SessionDep,
+):
+    paper = await paper_service.get_paper_by_id(paper_id, session)
+    if not paper:
+        raise NotFoundError(message="Paper not found")
+
+    if not paper.s3_key:
+        raise NotFoundError(message="PDF not found")
+
+    try:
+        obj = get_pdf_object(paper.s3_key)
+    except FileNotFoundError:
+        raise NotFoundError(message="PDF not found")
+
+    body = obj["Body"]
+    headers = {
+        "Content-Disposition": 'inline; filename="paper.pdf"',
+        "Cache-Control": "private, max-age=300",
+    }
+    length = obj.get("ContentLength")
+    if length is not None:
+        headers["Content-Length"] = str(length)
+
+    return StreamingResponse(
+        body.iter_chunks(chunk_size=256 * 1024),
+        media_type="application/pdf",
+        headers=headers,
+    )
+
+
 @papers_router.get('/{paper_id}/pdf-url')
-async def get_paper_contents(paper_id: UUID, session: SessionDep):
+async def get_paper_contents(
+    paper_id: UUID,
+    clerk_user_id: ClerkUserIdDep,
+    session: SessionDep,
+) -> PaperPdfUrlResponse:
     paper = await paper_service.get_paper_by_id(paper_id, session)
     if not paper:
         raise HTTPException(
@@ -30,12 +68,28 @@ async def get_paper_contents(paper_id: UUID, session: SessionDep):
             detail="Paper not found"
         )
 
-    pdf_url = get_pdf_url(paper.s3_key)
-    if not pdf_url:
+    if not paper.s3_key:
         raise HTTPException(
             status_code=404,
             detail="PDF not found"
         )
+
+    signed = get_pdf_url(paper.s3_key)
+
+    return PaperPdfUrlResponse(
+        url=str(signed["url"]),
+        expires_in=int(signed["expires_in"]),
+        paper=PaperResponse(
+            uid=paper.uid,
+            title=paper.title,
+            authors=paper.authors,
+            openalex_id=paper.openalex_id,
+            doi=paper.doi,
+            status=paper.status,
+            abstract=paper.abstract,
+            already_added=True,
+        ),
+    )
 
 
 @papers_router.get('/')

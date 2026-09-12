@@ -4,8 +4,13 @@ Thumbs.db
 
 # Editors
 .vscode/
-.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 .idea/
+
+# Graphify
+graphify-out/
 
 # Env files
 .env
