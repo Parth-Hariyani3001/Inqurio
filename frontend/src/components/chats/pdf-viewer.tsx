@@ -17,12 +17,7 @@ import { Tooltip, TooltipTrigger } from '@/components/ui/tooltip'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { getPageMetrics, loadPaperPdf, TextLayer } from '#/lib/pdf.ts'
-import type {
-  PageMetrics,
-  PDFDocumentProxy,
-  PDFPageProxy,
-  RenderTask,
-} from '#/lib/pdf.ts'
+import type { PageMetrics, PDFDocumentProxy, RenderTask } from '#/lib/pdf.ts'
 import { cn } from '@/lib/utils'
 
 const MIN_SCALE = 0.5
@@ -54,7 +49,7 @@ export function PdfViewer({
 }) {
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [metrics, setMetrics] = useState<Array<PageMetrics>>([])
-  const [scale, setScale] = useState(1)
+  const [scale, setScale] = useState<number | null>(null)
   const [fitWidthScale, setFitWidthScale] = useState(1)
   const [currentPage, setCurrentPage] = useState(1)
   const [visiblePages, setVisiblePages] = useState<Set<number>>(new Set([1]))
@@ -62,8 +57,7 @@ export function PdfViewer({
   const [notReady, setNotReady] = useState(false)
   const scrollerRef = useRef<HTMLDivElement>(null)
   const pageEls = useRef(new Map<number, HTMLElement>())
-  const didFitRef = useRef(false)
-  const [hasMeasured, setHasMeasured] = useState(false)
+  const followFitRef = useRef(true)
 
   useEffect(() => {
     let cancelled = false
@@ -101,30 +95,42 @@ export function PdfViewer({
   }, [paperId, token])
 
   useEffect(() => {
+    followFitRef.current = true
+    setScale(null)
+    setFitWidthScale(1)
+    setCurrentPage(1)
+    setVisiblePages(new Set([1]))
+  }, [paperId])
+
+  useEffect(() => {
     const scroller = scrollerRef.current
     if (!scroller || !metrics[0]) return
 
+    let timer: number | undefined
+
     const updateFit = () => {
-      const available = scroller.clientWidth - 24
+      const width = scroller.clientWidth
+      if (width <= 0) return
       const next = Math.max(
         MIN_SCALE,
-        Math.min(MAX_SCALE, available / metrics[0].width),
+        Math.min(MAX_SCALE, (width - 24) / metrics[0].width),
       )
       setFitWidthScale(next)
-      setHasMeasured(true)
+      if (!followFitRef.current) return
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        setScale(next)
+      }, 50)
     }
 
     updateFit()
     const observer = new ResizeObserver(updateFit)
     observer.observe(scroller)
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      window.clearTimeout(timer)
+    }
   }, [metrics])
-
-  useEffect(() => {
-    if (!hasMeasured || !metrics[0] || didFitRef.current) return
-    didFitRef.current = true
-    setScale(fitWidthScale)
-  }, [fitWidthScale, hasMeasured, metrics])
 
   function scrollToPage(pageNumber: number) {
     pageEls.current.get(pageNumber)?.scrollIntoView({ block: 'start' })
@@ -207,10 +213,13 @@ export function PdfViewer({
               aria-label="Zoom out"
               size="icon-sm"
               variant="ghost"
-              isDisabled={scale <= MIN_SCALE}
-              onPress={() =>
-                setScale((current) => Math.max(MIN_SCALE, current - SCALE_STEP))
-              }
+              isDisabled={scale == null || scale <= MIN_SCALE}
+              onPress={() => {
+                followFitRef.current = false
+                setScale((current) =>
+                  Math.max(MIN_SCALE, (current ?? fitWidthScale) - SCALE_STEP),
+                )
+              }}
             >
               <Minus />
             </Button>
@@ -220,7 +229,10 @@ export function PdfViewer({
               aria-label="Fit width"
               size="icon-sm"
               variant="ghost"
-              onPress={() => setScale(fitWidthScale)}
+              onPress={() => {
+                followFitRef.current = true
+                setScale(fitWidthScale)
+              }}
             >
               <Scan />
             </Button>
@@ -230,10 +242,13 @@ export function PdfViewer({
               aria-label="Zoom in"
               size="icon-sm"
               variant="ghost"
-              isDisabled={scale >= MAX_SCALE}
-              onPress={() =>
-                setScale((current) => Math.min(MAX_SCALE, current + SCALE_STEP))
-              }
+              isDisabled={scale == null || scale >= MAX_SCALE}
+              onPress={() => {
+                followFitRef.current = false
+                setScale((current) =>
+                  Math.min(MAX_SCALE, (current ?? fitWidthScale) + SCALE_STEP),
+                )
+              }}
             >
               <Plus />
             </Button>
@@ -256,26 +271,30 @@ export function PdfViewer({
         ref={scrollerRef}
         className="min-h-0 flex-1 overflow-auto bg-muted p-3"
       >
-        <div className="flex flex-col gap-3">
-          {metrics.map((page, index) => {
-            const pageNumber = index + 1
-            const shouldPaint = [...visiblePages].some(
-              (visible) => Math.abs(visible - pageNumber) <= NEARBY_PAGES,
-            )
-            return (
-              <PdfPage
-                key={pageNumber}
-                pdf={pdf}
-                pageNumber={pageNumber}
-                metrics={page}
-                scale={scale}
-                paint={shouldPaint}
-                pageEls={pageEls.current}
-                onVisible={onPageVisible}
-              />
-            )
-          })}
-        </div>
+        {scale == null ? (
+          <Skeleton className="size-full min-h-64" />
+        ) : (
+          <div className="flex flex-col gap-3">
+            {metrics.map((page, index) => {
+              const pageNumber = index + 1
+              const shouldPaint = [...visiblePages].some(
+                (visible) => Math.abs(visible - pageNumber) <= NEARBY_PAGES,
+              )
+              return (
+                <PdfPage
+                  key={pageNumber}
+                  pdf={pdf}
+                  pageNumber={pageNumber}
+                  metrics={page}
+                  scale={scale}
+                  paint={shouldPaint}
+                  pageEls={pageEls.current}
+                  onVisible={onPageVisible}
+                />
+              )
+            })}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -302,7 +321,6 @@ function PdfPage({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const textLayerRef = useRef<HTMLDivElement>(null)
   const onVisibleRef = useRef(onVisible)
-  const cancelledRef = useRef(false)
   onVisibleRef.current = onVisible
 
   useEffect(() => {
@@ -323,18 +341,16 @@ function PdfPage({
 
   useEffect(() => {
     if (!paint) return
-    cancelledRef.current = false
     const canvas = canvasRef.current
     const textLayerEl = textLayerRef.current
     if (!canvas || !textLayerEl) return
 
+    let cancelled = false
     let renderTask: RenderTask | null = null
-    let page: PDFPageProxy | null = null
-    const isCancelled = () => cancelledRef.current
 
     async function renderPage() {
-      page = await pdf.getPage(pageNumber)
-      if (cancelledRef.current || !canvas || !textLayerEl) return
+      const page = await pdf.getPage(pageNumber)
+      if (cancelled || !canvas || !textLayerEl) return
 
       const nextViewport = page.getViewport({ scale })
 
@@ -354,8 +370,10 @@ function PdfPage({
       canvas.style.width = `${nextViewport.width}px`
       canvas.style.height = `${nextViewport.height}px`
 
-      const context = canvas.getContext('2d')
+      const context = canvas.getContext('2d', { alpha: false })
       if (!context) return
+      context.setTransform(1, 0, 0, 1, 0, 0)
+      context.clearRect(0, 0, canvas.width, canvas.height)
 
       const scaleX = canvas.width / nextViewport.width
       const scaleY = canvas.height / nextViewport.height
@@ -367,9 +385,9 @@ function PdfPage({
       try {
         await renderTask.promise
       } catch {
-        if (isCancelled()) return
+        if (cancelled) return
       }
-      if (isCancelled()) return
+      if (cancelled) return
 
       textLayerEl.replaceChildren()
       textLayerEl.style.width = `${nextViewport.width}px`
@@ -386,7 +404,7 @@ function PdfPage({
     void renderPage()
 
     return () => {
-      cancelledRef.current = true
+      cancelled = true
       renderTask?.cancel()
     }
   }, [paint, pdf, pageNumber, scale])

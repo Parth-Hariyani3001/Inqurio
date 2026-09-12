@@ -1,11 +1,16 @@
+from __future__ import annotations
+
 import hashlib
 
-from src.rag.chunker import chunk_sections, group_chunks_on_section
-from src.worker.celery_app import app
+from src.rag.chunker import (
+    chunk_sections,
+    embed_text_for_chunk,
+    group_chunks_on_section,
+)
 from src.schemas.papers import PaperProcess
 from src.utils.grobid import GROBID
 from src.utils.open_alex import OpenAlex
-from src.utils.object_store import upload_pdf_bytes
+from src.utils.object_store import get_pdf_object, upload_pdf_bytes
 from src.services.sections import SectionService
 from src.services.chunks import ChunkService
 from src.services.papers import PaperService
@@ -15,7 +20,12 @@ from sqlalchemy.ext.asyncio.session import async_sessionmaker
 from src.db.main import create_task_engine
 from src.db.models import Status
 from src.rag.embeddings import embeddings
-from src.rag.vector_store import vector_store
+from src.rag.vector_store import (
+    collection_name,
+    delete_points_for_paper,
+    ensure_collection,
+    vector_store,
+)
 from qdrant_client.models import PointStruct
 from celery.utils.log import get_task_logger
 
@@ -24,6 +34,19 @@ chunk_service = ChunkService()
 paper_service = PaperService()
 
 logger = get_task_logger(__name__)
+
+
+def _load_paper_bytes(urls: list[str], s3_key: str | None) -> bytes:
+    if s3_key:
+        try:
+            obj = get_pdf_object(s3_key)
+            body = obj["Body"].read()
+            if body:
+                return body
+        except FileNotFoundError:
+            logger.warning("Cached PDF missing in object store; re-downloading")
+
+    return OpenAlex.download_paper_contents(urls)
 
 
 async def process_paper_async(paper_payload: PaperProcess):
@@ -59,10 +82,15 @@ async def process_paper_async(paper_payload: PaperProcess):
                 urls = payload.urls
                 paper_id = payload.paper_id
 
-                logger.info("Downloading paper contents")
-                paper_contents = OpenAlex.download_paper_contents(urls)
+                # Clear prior index so reprocess/re-queue does not duplicate chunks.
+                logger.info("Clearing previous sections and vectors for paper")
+                delete_points_for_paper(paper_id)
+                await section_service.delete_sections_for_paper(paper_id, session)
+
+                logger.info("Loading paper contents")
+                paper_contents = _load_paper_bytes(urls, paper.s3_key)
                 file_hash = hashlib.sha256(paper_contents).hexdigest()
-                object_key = f"pdfs/{paper_id}.pdf"
+                object_key = paper.s3_key or f"pdfs/{paper_id}.pdf"
 
                 logger.info("Uploading the paper to R2")
                 upload_pdf_bytes(paper_contents, object_key)
@@ -81,6 +109,8 @@ async def process_paper_async(paper_payload: PaperProcess):
                 chunks = chunk_sections(paper_id, paper_sections)
                 grouped_sections = group_chunks_on_section(chunks)
 
+                ensure_collection(recreate_if_dim_mismatch=False)
+
                 logger.info("Creating Chunks for each section")
                 for (title, order), documents in grouped_sections.items():
                     logger.info(
@@ -93,10 +123,8 @@ async def process_paper_async(paper_payload: PaperProcess):
                     )
 
                     contents = []
-
-                    for _, document in enumerate(documents):
+                    for document in documents:
                         document.metadata["section_id"] = str(section.uid)
-                        document.page_content = document.page_content.replace("\n", "")
                         contents.append(document.page_content)
 
                     new_chunks = await chunk_service.bulk_create_chunks(
@@ -107,7 +135,10 @@ async def process_paper_async(paper_payload: PaperProcess):
                     )
 
                     vectors = embeddings.embed_documents(
-                        [chunk.content for chunk in new_chunks]
+                        [
+                            embed_text_for_chunk(title, chunk.content)
+                            for chunk in new_chunks
+                        ]
                     )
 
                     points = [
@@ -118,13 +149,14 @@ async def process_paper_async(paper_payload: PaperProcess):
                                 "paper_id": str(chunk.paper_id),
                                 "section_id": str(chunk.section_id),
                                 "chunk_index": chunk.chunk_index,
+                                "section_title": title,
                             },
                         )
                         for chunk, vector in zip(new_chunks, vectors)
                     ]
 
                     vector_store.client.upsert(
-                        collection_name="papers",
+                        collection_name=collection_name,
                         points=points,
                     )
 

@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 from src.schemas.papers import PaperCreatePayload, PaperPdfUrlResponse, PaperResponse
 from src.utils.clerk import validate_user_session
-from src.services.papers import PaperService, PaperNotFoundInOpenAlexError
+from src.services.papers import PaperService
 from src.services.users import UserService
 from src.db.main import get_session
 from src.utils.object_store import get_pdf_object, get_pdf_url
@@ -143,4 +143,27 @@ async def create_paper(
             "status": result.status.value,
             "ready": result.ready,
         }
+    )
+
+
+@papers_router.post('/{paper_id}/reprocess')
+async def reprocess_paper(
+    paper_id: UUID,
+    clerk_user_id: ClerkUserIdDep,
+    session: SessionDep,
+):
+    user_data = await user_service.get_user_by_clerk_id(clerk_user_id, session)
+    if not user_data:
+        raise NotFoundError(message="User not found")
+
+    result = await paper_service.reprocess_paper(paper_id, session)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "success": True,
+            "message": result.message,
+            "paper_id": str(result.paper_id),
+            "status": result.status.value,
+            "ready": result.ready,
+        },
     )

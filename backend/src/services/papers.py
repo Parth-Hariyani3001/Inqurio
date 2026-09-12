@@ -3,6 +3,7 @@ from src.errors.exceptions import (
     PaperNotFoundInOpenAlexError,
     PaperNotReadyError,
     PaperUrlsNotFoundError,
+    NotFoundError,
 )
 from uuid import UUID
 from sqlalchemy import or_
@@ -175,5 +176,56 @@ class PaperService:
             message=(
                 "The system has started processing the paper, "
                 "it will be available once the processing is finished"
+            ),
+        )
+
+    async def reprocess_paper(
+        self,
+        paper_id: UUID,
+        session: AsyncSession,
+    ) -> PaperIngestResult:
+        """Re-chunk and re-embed an existing paper with the current RAG pipeline."""
+        paper = await self.get_paper_by_id(paper_id, session)
+        if not paper:
+            raise NotFoundError(message="Paper not found")
+
+        openalex_payload = await OpenAlex.get_data_by_openalex_id(paper.openalex_id)
+        urls: list[str] = []
+        if openalex_payload:
+            urls = OpenAlex.get_pdf_urls(openalex_payload)
+
+        if not urls and not paper.s3_key:
+            raise PaperUrlsNotFoundError()
+
+        authors = paper.authors
+        if openalex_payload and not authors:
+            authors = OpenAlex.get_authors(openalex_payload)
+
+        await self.update_paper(
+            paper=paper,
+            updates={"status": Status.PENDING},
+            session=session,
+        )
+
+        from src.worker.tasks import process_paper
+
+        process_paper.delay(
+            {
+                "paper_id": str(paper.uid),
+                "openalex_id": paper.openalex_id,
+                "user_id": str(paper.uploaded_by) if paper.uploaded_by else str(paper.uid),
+                "urls": urls,
+                "authors": authors or [],
+            }
+        )
+
+        return PaperIngestResult(
+            paper_id=paper.uid,
+            status=Status.PENDING,
+            ready=False,
+            already_existed=True,
+            message=(
+                "Paper reprocessing started; it will be available once "
+                "chunking and re-indexing finish"
             ),
         )

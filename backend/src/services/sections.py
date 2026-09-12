@@ -1,7 +1,6 @@
 from sqlmodel.ext.asyncio.session import AsyncSession
-from sqlmodel import select
+from sqlmodel import col, delete
 from src.db.models import Section
-from src.schemas.papers import PaperCreate
 from uuid import UUID
 
 
@@ -18,3 +17,12 @@ class SectionService:
         await session.commit()
 
         return new_section
+
+    async def delete_sections_for_paper(
+        self,
+        paper_id: UUID,
+        session: AsyncSession,
+    ) -> None:
+        statement = delete(Section).where(col(Section.paper_id) == paper_id)
+        await session.exec(statement)
+        await session.commit()

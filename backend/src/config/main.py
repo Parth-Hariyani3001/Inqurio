@@ -19,7 +19,13 @@ class Settings(BaseSettings):
     ai_api_key: str = ""
     ai_base_url: str = ""
     tavily_api_key: str = ""
-    rag_top_k: int = 6
+    rag_top_k: int = 8
+    rag_candidate_k: int = 30
+    rag_min_score: float = 0.15
+    rag_rrf_k: int = 60
+    rag_neighbor_window: int = 1
+    rag_rerank_enabled: bool = True
+    rag_query_rewrite_enabled: bool = True
     qdrant_url: str = "http://localhost:6333"
     cors_origins: list[str] = [
         "http://localhost:3000",

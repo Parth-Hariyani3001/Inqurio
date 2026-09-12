@@ -13,6 +13,7 @@ from src.agent.chat_agent import build_chat_agent, history_to_langchain_messages
 from src.agent.guardrails import build_grounded_user_message
 from src.db.models import ChatRole, Message
 from src.errors.exceptions import BadRequestError
+from src.rag.query_rewrite import rewrite_retrieval_query
 from src.rag.retrieval import search_paper_chunks
 from src.schemas.sessions import MessageResponse
 from src.services.papers import PaperService
@@ -198,7 +199,12 @@ class ChatService:
         prior = [message for message in history if message.uid != user_message.uid]
         lc_messages = history_to_langchain_messages(prior)
 
-        paper_hits = await search_paper_chunks(chat.paper_id, cleaned)
+        retrieval_query = await rewrite_retrieval_query(
+            cleaned,
+            history=lc_messages,
+            paper_title=paper_title,
+        )
+        paper_hits = await search_paper_chunks(chat.paper_id, retrieval_query)
         lc_messages.append(
             HumanMessage(content=build_grounded_user_message(
                 cleaned, paper_hits))
