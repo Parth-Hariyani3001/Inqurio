@@ -1,0 +1,13 @@
+[tool.poe.tasks]
+start = { cmd = "uvicorn src:app --reload --reload-dir src" }
+start_docker_compose = "docker compose up -d"
+start_docker_compose_backend = "docker compose -f src/docker_compose/backend/docker-compose.yml up -d"
+start_docker_compose_grobid = "docker compose -f src/docker_compose/grobid/docker-compose.yml up -d"
+stop_docker_compose_backend = "docker compose -f src/docker_compose/backend/docker-compose.yml down"
+stop_docker_compose_grobid = "docker compose -f src/docker_compose/grobid/docker-compose.yml down"
+start_celery = "celery -A src.worker.celery_app worker --loglevel=info -E --pool=solo"
+start_flower = "celery -A src.worker.celery_app flower"
+
+[tool.poe.tasks.migrate]
+cmd = "alembic revision --autogenerate -m '${message}'"
+args = [{ name = "message", positional = true, help = "Migration message" }]
