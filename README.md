@@ -10,7 +10,7 @@ Inquiro is a research paper reading room: find papers through OpenAlex, ingest P
 - **Ingest** — Add papers by OpenAlex ID; a background worker parses, chunks, embeds, and indexes them
 - **Library** — Personal paper collection with search (`/dashboard/library`)
 - **Read** — Inline PDF viewer next to the chat workspace
-- **Ask** — Streaming chat with paper and web citations, scoped to the attached paper
+- **Ask** — Streaming chat with paper, OpenAlex, and optional web citations, scoped to the attached paper
 - **Auth** — Clerk sign-in; JWT forwarded to the backend; webhooks keep local users in sync
 
 ## Architecture
@@ -21,6 +21,7 @@ Browser (TanStack Start :3000)
   ▼
 FastAPI (:8000)
   ├── PostgreSQL     users, papers, chats, messages, sections, chunks
+  │                  (+ full-text keyword channel for hybrid RAG)
   ├── Celery + Redis background paper processing
   ├── Qdrant         chunk vectors (1024-dim, cosine)
   ├── Cloudflare R2  stored PDFs
@@ -28,7 +29,9 @@ FastAPI (:8000)
   └── OpenAI-compatible API
         ├── embeddings (ingest + retrieval)
         ├── chat model (LangGraph agent)
-        └── optional Tavily (web background search)
+        ├── optional query rewrite / rerank models
+        ├── OpenAlex tool (scholarly related-work search)
+        └── optional Tavily (non-scholarly web background)
 ```
 
 ### Monorepo layout
@@ -44,7 +47,7 @@ FastAPI (:8000)
 
 1. **Find** — Search OpenAlex from Explore, or browse your Library / Papers catalog.
 2. **Read** — Ingest a paper by OpenAlex ID. When status is `ready`, open a chat session; the PDF loads beside the conversation.
-3. **Ask** — Send a message; the assistant answers using retrieved paper passages (and optional web context for citations/related work).
+3. **Ask** — Send a message; the assistant answers using hybrid-retrieved paper passages, OpenAlex metadata when needed, and optional web background.
 
 ### Chat message flow
 
@@ -52,19 +55,21 @@ FastAPI (:8000)
 sequenceDiagram
   participant UI as Frontend
   participant API as FastAPI
-  participant RAG as Qdrant
+  participant RAG as HybridRAG
   participant Agent as LangGraphAgent
   participant DB as PostgreSQL
 
   UI->>API: POST /sessions/{id}/messages (SSE)
   API->>DB: Save user message
-  API->>RAG: Prefetch top-k chunks for query
+  API->>API: Optional query rewrite (anaphora)
+  API->>RAG: Dense (Qdrant) + keyword (Postgres) → RRF → rerank
   API->>Agent: Grounded prompt + history
   loop Streaming
     Agent->>API: Token deltas / tool results
+    Note over Agent,API: Tools: retrieve_paper_context, search_openalex_works, optional Tavily
     API->>UI: SSE message.assistant.delta
   end
-  API->>DB: Save assistant message + citations
+  API->>DB: Save assistant message + paper/openalex/web citations
   API->>UI: SSE message.assistant.done
 ```
 
@@ -97,7 +102,8 @@ Paper ingest runs asynchronously: `pending` → `processing` → `ready` or `fai
 | Chunking | LangChain `RecursiveCharacterTextSplitter` |
 | Embeddings | OpenAI-compatible API (`langchain-openai`) |
 | Vectors | Qdrant collection `papers` |
-| Chat | LangGraph ReAct agent + optional Tavily search |
+| Retrieval | Hybrid dense + Postgres FTS, RRF fusion, optional LLM rerank |
+| Chat | LangGraph ReAct agent + OpenAlex tool + optional Tavily |
 
 ## Prerequisites
 
@@ -257,10 +263,21 @@ Copy from [`backend/.env.example`](backend/.env.example). Loaded by [`backend/sr
 | `GROBID_URL` | No | GROBID base URL (default `http://localhost:8070/`) |
 | `EMBEDDING_MODEL` | Yes | Embedding model name |
 | `CHAT_MODEL` | No | Chat model (default in `.env.example`: `gpt-4o-mini`) |
+| `REWRITE_MODEL` | No | Optional fast model for RAG query rewrite (falls back to `CHAT_MODEL`) |
 | `AI_API_KEY` | Yes | OpenAI-compatible API key |
 | `AI_BASE_URL` | If needed | Base URL for non-OpenAI providers |
-| `TAVILY_API_KEY` | No | Enables web search tool in chat |
-| `RAG_TOP_K` | No | Retrieval chunk count (default `6`) |
+| `REWRITE_AI_BASE_URL` | No | Optional rewrite endpoint (falls back to `AI_BASE_URL`) |
+| `TAVILY_API_KEY` | No | Enables optional web background search in chat |
+| `RAG_TOP_K` | No | Final retrieved chunk count (default `8`) |
+| `RAG_CANDIDATE_K` | No | Dense/keyword recall pool before fusion (default `20`) |
+| `RAG_MIN_SCORE` | No | Score floor after fusion/rerank (default `0.15`) |
+| `RAG_RRF_K` | No | Reciprocal-rank fusion constant (default `60`) |
+| `RAG_NEIGHBOR_WINDOW` | No | Adjacent chunk expansion window (default `1`) |
+| `RAG_RERANK_ENABLED` | No | LLM listwise rerank (default `true`; skipped for local models) |
+| `RAG_RERANK_MAX_CANDIDATES` | No | Max passages sent to reranker (default `15`) |
+| `RAG_MAX_CONTEXT_CHUNKS` | No | Cap after neighbor expansion (default `12`) |
+| `RAG_QUERY_REWRITE_ENABLED` | No | Conversational query rewrite (default `true`) |
+| `RAG_EMBED_CACHE_SIZE` | No | In-process embedding cache size (default `256`) |
 | `QDRANT_URL` | No | Qdrant HTTP URL (default `http://localhost:6333`) |
 | `CORS_ORIGINS` | No | JSON list of allowed origins (default includes `:3000`) |
 

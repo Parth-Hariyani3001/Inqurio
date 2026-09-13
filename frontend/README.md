@@ -8,7 +8,7 @@ For full-stack setup (PostgreSQL, backend, Clerk, R2), see the [root README](../
 
 - **Landing** — Marketing page for guests; redirects signed-in users to Explore
 - **Dashboard** — Sidebar shell with Explore, Library, Papers, and Chats
-- **Chat workspace** — Resizable split view: PDF on one side, streaming markdown chat with citations on the other
+- **Chat workspace** — Resizable split view: PDF on one side, streaming markdown chat with paper / OpenAlex / web citations on the other
 - **OpenAlex search** — Find works, view details, ingest papers into the backend
 
 ## Routes
@@ -38,6 +38,8 @@ Routes live under `src/routes/` using TanStack Router file-based routing.
 | [`src/lib/me.ts`](src/lib/me.ts) | Current user profile from backend |
 
 Chat UI components: `src/components/chats/` (`chat-workspace`, `session-chat`, `message-citations`, `pdf-folio`).
+
+Assistant messages expose structured citations (`paper`, `openalex`, `web`) via `parseMessageCitations` in `sessions.ts`. The Sources panel in `message-citations.tsx` links OpenAlex works into Explore when an ID is present.
 
 ## Auth
 

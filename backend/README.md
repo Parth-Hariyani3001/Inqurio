@@ -14,6 +14,7 @@ For full-stack setup (Clerk, R2, PostgreSQL, frontend), see the [root README](..
 - User library (`GET /api/v1/user-papers`)
 - OpenAlex proxy for work search and detail (`/api/v1/openalex/works`)
 - Chat sessions CRUD and streaming Q&A (`/api/v1/sessions`)
+- Hybrid RAG (dense + keyword), optional query rewrite / LLM rerank, OpenAlex + optional Tavily tools
 - Background processing: download PDF, upload to Cloudflare R2, parse with GROBID, chunk, embed, upsert into Qdrant
 - Shared paper library plus per-user assignment (`user_papers`)
 - Typed API errors via `InquiroError` handlers
@@ -35,8 +36,10 @@ Paper status flow: `pending` → `processing` → `ready` or `failed`.
 | Chunking | LangChain `RecursiveCharacterTextSplitter` (size 600, overlap 150) |
 | Embeddings | OpenAI-compatible API (`langchain-openai`) |
 | Vectors | Qdrant collection `papers` (1024-dim, cosine) |
+| Retrieval | Hybrid dense (Qdrant) + keyword (Postgres FTS), RRF, optional LLM rerank |
 | Chat | LangGraph ReAct agent (`langgraph`, `langchain-openai`) |
-| Web search | Optional Tavily (`langchain-tavily`) |
+| Scholarly search | OpenAlex tool (`search_openalex_works`) |
+| Web search | Optional Tavily (`langchain-tavily`) for non-scholarly background |
 
 ## Architecture
 
@@ -69,12 +72,17 @@ If the paper already exists, ingest assigns it to the current user instead of re
 POST /sessions/{id}/messages (SSE)
         │
         ├── Save user message → message.user
-        ├── Emit chat.phase (understanding → searching → thinking)
-        ├── Prefetch Qdrant chunks (RAG_TOP_K)
+        ├── chat.phase understanding
+        ├── Optional query rewrite (anaphora + history → standalone search query)
+        ├── Speculative embed when rewrite is likely (reuse vector if query unchanged)
+        ├── chat.phase searching
+        ├── Hybrid retrieval (see below) → prefetch hits into agent cache
         ├── Build grounded user prompt (guardrails)
+        ├── chat.phase thinking
         ▼
    LangGraph ReAct agent
-        ├── Tool: retrieve_paper_context (Qdrant + PostgreSQL)
+        ├── Tool: retrieve_paper_context (hybrid search; may hit cache)
+        ├── Tool: search_openalex_works → chat.phase searching_openalex
         └── Tool: search_paper_background (Tavily, if TAVILY_API_KEY set)
             → chat.phase searching_web
         │
@@ -82,16 +90,28 @@ POST /sessions/{id}/messages (SSE)
         └── Persist assistant message + citations → message.assistant.done
 ```
 
-Scope guardrails in `src/agent/guardrails.py` restrict answers to the attached paper. Web search is only for paper-related background (citations, related work, definitions used in the paper).
+#### Hybrid retrieval (`src/rag/retrieval.py`)
+
+1. **Dense** — embed query → Qdrant cosine search filtered by `paper_id`
+2. **Keyword** — Postgres full-text search over chunks for the same paper
+3. **RRF** — fuse ranked lists (`RAG_RRF_K`)
+4. **Rerank** — optional listwise LLM rerank (`RAG_RERANK_ENABLED`; skipped for local/loopback models)
+5. **Expand** — pull neighboring chunks (`RAG_NEIGHBOR_WINDOW`), cap at `RAG_MAX_CONTEXT_CHUNKS`
+
+Query rewrite (`src/rag/query_rewrite.py`) runs when history exists and the latest turn has anaphora (e.g. "it", "this", "those").
+
+Scope guardrails in `src/agent/guardrails.py` restrict answers to the attached paper. Prefer OpenAlex for scholarly metadata (related work, citations, authors, venues). Use Tavily only for non-scholarly paper-related background (definitions or assumed context).
+
+Citations on the assistant message are a JSON object with three buckets: `paper` (chunk excerpts), `openalex` (works), and `web` (URLs).
 
 SSE event types:
 
 | Event | Payload |
 | --- | --- |
 | `message.user` | Saved user message |
-| `chat.phase` | `{ "phase": "understanding\|searching\|thinking\|searching_web\|writing", "label": "..." }` status before/during generation |
+| `chat.phase` | `{ "phase": "understanding\|searching\|thinking\|searching_openalex\|searching_web\|writing", "label": "..." }` status before/during generation |
 | `message.assistant.delta` | `{ "delta": "..." }` streaming token |
-| `message.assistant.done` | Full assistant message with citations |
+| `message.assistant.done` | Full assistant message with `citations: { paper, openalex, web }` |
 | `error` | `{ "detail": "..." }` |
 
 ## Project layout
@@ -106,7 +126,7 @@ src/
   routers/                 # papers, sessions, user-papers, users, openalex, webhooks
   schemas/                 # Request/response models
   services/                # Papers, sessions, chat, users, sections, chunks
-  rag/                     # Chunker, embeddings, Qdrant store, retrieval
+  rag/                     # Chunker, embeddings, Qdrant, hybrid retrieval, rewrite, rerank
   utils/                   # Clerk, OpenAlex, GROBID, R2, PDF
   worker/                  # Celery app and process_paper task
   docker_compose/
@@ -188,9 +208,20 @@ Defined in `.env.example` and loaded by `src/config/main.py`:
 | `GROBID_URL` | GROBID base URL (default `http://localhost:8070/`) |
 | `EMBEDDING_MODEL` | Embedding model name |
 | `CHAT_MODEL` | Chat model for the agent |
+| `REWRITE_MODEL` | Optional rewrite model (falls back to `CHAT_MODEL`) |
 | `AI_API_KEY` / `AI_BASE_URL` | OpenAI-compatible client |
-| `TAVILY_API_KEY` | Optional; enables web search tool in chat |
-| `RAG_TOP_K` | Number of chunks retrieved per query (default `6`) |
+| `REWRITE_AI_BASE_URL` | Optional rewrite endpoint (falls back to `AI_BASE_URL`) |
+| `TAVILY_API_KEY` | Optional; enables non-scholarly web search tool in chat |
+| `RAG_TOP_K` | Final chunk count after rerank (default `8`) |
+| `RAG_CANDIDATE_K` | Dense/keyword recall pool before RRF (default `20`) |
+| `RAG_MIN_SCORE` | Score floor after fusion/rerank (default `0.15`) |
+| `RAG_RRF_K` | Reciprocal-rank fusion constant (default `60`) |
+| `RAG_NEIGHBOR_WINDOW` | Adjacent chunk expansion (default `1`) |
+| `RAG_RERANK_ENABLED` | LLM listwise rerank (default `true`) |
+| `RAG_RERANK_MAX_CANDIDATES` | Max passages for reranker (default `15`) |
+| `RAG_MAX_CONTEXT_CHUNKS` | Cap after neighbor expansion (default `12`) |
+| `RAG_QUERY_REWRITE_ENABLED` | Conversational query rewrite (default `true`) |
+| `RAG_EMBED_CACHE_SIZE` | In-process embedding cache size (default `256`) |
 | `QDRANT_URL` | Qdrant HTTP URL (default `http://localhost:6333`) |
 | `CORS_ORIGINS` | JSON list of allowed frontend origins |
 
