@@ -14,6 +14,8 @@ import {
 } from '@/components/ui/sidebar'
 import { recentSessionsQueryOptions } from '#/lib/sessions.ts'
 
+const SKELETON_WIDTHS = ['54%', '70%', '82%', '63%']
+
 export function RecentChats() {
   const navigate = useNavigate()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
@@ -36,9 +38,9 @@ export function RecentChats() {
       <SidebarGroupContent>
         <SidebarMenu>
           {recentQuery.isPending
-            ? Array.from({ length: 4 }, (_, index) => (
+            ? SKELETON_WIDTHS.map((width, index) => (
                 <SidebarMenuItem key={index}>
-                  <SidebarMenuSkeleton />
+                  <SidebarMenuSkeleton width={width} />
                 </SidebarMenuItem>
               ))
             : sessions.map((session) => (

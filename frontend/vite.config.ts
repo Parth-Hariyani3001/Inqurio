@@ -10,7 +10,9 @@ import { nitro } from 'nitro/vite'
 const config = defineConfig({
   resolve: { tsconfigPaths: true },
   optimizeDeps: {
-    include: ['pdfjs-dist'],
+    // Large client-only packages — prebundle at startup so dynamic imports
+    // don't race a missing .vite/deps chunk (Failed to fetch ...).
+    include: ['pdfjs-dist', '@viz-js/viz'],
   },
   plugins: [
     devtools(),

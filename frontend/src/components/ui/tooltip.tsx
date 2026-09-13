@@ -1,6 +1,5 @@
 import * as React from "react"
 import {
-  Focusable,
   OverlayArrow,
   Tooltip as TooltipPrimitive,
   TooltipTrigger as TooltipTriggerPrimitive,
@@ -21,9 +20,7 @@ function TooltipTrigger({
       delay={delay}
       {...props}
     >
-      <Focusable>
-        {trigger as React.ComponentProps<typeof Focusable>["children"]}
-      </Focusable>
+      {trigger}
       {tooltip}
     </TooltipTriggerPrimitive>
   )

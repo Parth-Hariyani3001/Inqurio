@@ -383,6 +383,9 @@ export function SessionChat({
                                       ) : (
                                         <AssistantMarkdown
                                           content={message.content}
+                                          isStreaming={
+                                            message.clientKey === streamingId
+                                          }
                                         />
                                       )}
                                     </BubbleContent>
