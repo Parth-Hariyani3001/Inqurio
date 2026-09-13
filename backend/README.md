@@ -43,66 +43,195 @@ Paper status flow: `pending` → `processing` → `ready` or `failed`.
 
 ## Architecture
 
+### System overview
+
+```mermaid
+flowchart TB
+  Client[Client + Clerk JWT] --> FastAPI
+
+  subgraph FastAPI["FastAPI app"]
+    R[Routers]
+    S[Services]
+    A[Agent + tools]
+    RAG[Hybrid RAG]
+  end
+
+  FastAPI --> PG[(PostgreSQL)]
+  FastAPI --> Q[(Qdrant)]
+  FastAPI --> Redis[(Redis)]
+  FastAPI --> R2[(R2 PDFs)]
+  Redis --> Celery[Celery process_paper]
+  Celery --> OA[OpenAlex]
+  Celery --> GROBID
+  Celery --> PG
+  Celery --> Q
+  Celery --> R2
+  A --> LLM[Chat / embed models]
+  A --> OA
+  A -.-> Tavily
+  RAG --> PG
+  RAG --> Q
+```
+
 ### Paper ingest
 
-```
-Client (Clerk JWT)
-        │
-        ▼
-   FastAPI (src:app)
-        │  ingest OpenAlex ID
-        ▼
-   PaperService ──► PostgreSQL (papers, user_papers)
-        │
-        ▼
-   Celery task process_paper
-        │
-        ├── OpenAlex PDF download
-        ├── Cloudflare R2 upload
-        ├── GROBID section parse
-        ├── chunk + persist sections/chunks
-        └── embed + Qdrant upsert
+```mermaid
+flowchart TD
+  A[POST /papers/upload<br/>openalex_id] --> B{Paper exists?}
+  B -->|No| C[Create paper pending<br/>assign user_papers]
+  B -->|Yes, new user| D[Assign existing paper]
+  B -->|Yes, already assigned| E[409 Conflict]
+  C --> F[Enqueue Celery process_paper]
+  D --> G{Status ready?}
+  G -->|Yes| H[201 Already ready]
+  G -->|No| F
+  F --> I[processing]
+  I --> J[Download OA PDF]
+  J --> K[Upload to R2]
+  K --> L[GROBID parse sections]
+  L --> M[Chunk + persist PG]
+  M --> N[Embed + Qdrant upsert]
+  N --> O[ready]
+  I -.->|error| P[failed]
 ```
 
 If the paper already exists, ingest assigns it to the current user instead of reprocessing. Assigning a paper the user already has returns a conflict.
 
 ### Chat / RAG
 
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant API as ChatService
+  participant RW as Query rewrite
+  participant RAG as Hybrid retrieval
+  participant Agent as LangGraph agent
+  participant DB as PostgreSQL
+
+  C->>API: POST /sessions/{id}/messages
+  API->>DB: Save user message
+  API-->>C: SSE message.user
+  API-->>C: chat.phase understanding
+  API->>RW: Rewrite if anaphora in history
+  Note over API: Speculative embed when rewrite likely
+  API-->>C: chat.phase searching
+  API->>RAG: Prefetch hits → agent cache
+  API->>API: build_grounded_user_message (guardrails)
+  API-->>C: chat.phase thinking
+  API->>Agent: History + grounded prompt
+
+  alt Tool: retrieve_paper_context
+    Agent->>RAG: Hybrid search (may hit cache)
+  else Tool: search_openalex_works
+    Agent-->>C: chat.phase searching_openalex
+  else Tool: search_paper_background
+    Agent-->>C: chat.phase searching_web
+  end
+
+  API-->>C: chat.phase writing
+  loop Tokens
+    Agent-->>API: delta
+    API-->>C: message.assistant.delta
+  end
+  API->>DB: Persist message + citations
+  API-->>C: message.assistant.done
 ```
-POST /sessions/{id}/messages (SSE)
-        │
-        ├── Save user message → message.user
-        ├── chat.phase understanding
-        ├── Optional query rewrite (anaphora + history → standalone search query)
-        ├── Speculative embed when rewrite is likely (reuse vector if query unchanged)
-        ├── chat.phase searching
-        ├── Hybrid retrieval (see below) → prefetch hits into agent cache
-        ├── Build grounded user prompt (guardrails)
-        ├── chat.phase thinking
-        ▼
-   LangGraph ReAct agent
-        ├── Tool: retrieve_paper_context (hybrid search; may hit cache)
-        ├── Tool: search_openalex_works → chat.phase searching_openalex
-        └── Tool: search_paper_background (Tavily, if TAVILY_API_KEY set)
-            → chat.phase searching_web
-        │
-        ├── chat.phase writing → Stream token deltas → message.assistant.delta
-        └── Persist assistant message + citations → message.assistant.done
-```
-
-#### Hybrid retrieval (`src/rag/retrieval.py`)
-
-1. **Dense** — embed query → Qdrant cosine search filtered by `paper_id`
-2. **Keyword** — Postgres full-text search over chunks for the same paper
-3. **RRF** — fuse ranked lists (`RAG_RRF_K`)
-4. **Rerank** — optional listwise LLM rerank (`RAG_RERANK_ENABLED`; skipped for local/loopback models)
-5. **Expand** — pull neighboring chunks (`RAG_NEIGHBOR_WINDOW`), cap at `RAG_MAX_CONTEXT_CHUNKS`
-
-Query rewrite (`src/rag/query_rewrite.py`) runs when history exists and the latest turn has anaphora (e.g. "it", "this", "those").
 
 Scope guardrails in `src/agent/guardrails.py` restrict answers to the attached paper. Prefer OpenAlex for scholarly metadata (related work, citations, authors, venues). Use Tavily only for non-scholarly paper-related background (definitions or assumed context).
 
 Citations on the assistant message are a JSON object with three buckets: `paper` (chunk excerpts), `openalex` (works), and `web` (URLs).
+
+### Retrieval process
+
+Hybrid retrieval is the paper-grounding path for chat. Entry point: `search_paper_chunks` in [`src/rag/retrieval.py`](src/rag/retrieval.py). Every search is **scoped to one `paper_id`** (Qdrant filter + Postgres join).
+
+#### When it runs
+
+```mermaid
+sequenceDiagram
+  participant Chat as ChatService.stream_message
+  participant RW as query_rewrite
+  participant Emb as embeddings
+  participant Ret as search_paper_chunks
+  participant Agent as LangGraph agent
+  participant Tool as retrieve_paper_context
+
+  Chat->>RW: will_rewrite_retrieval_query / rewrite_retrieval_query
+  opt Rewrite likely
+    Chat->>Emb: Speculative embed_query_cached(original)
+  end
+  Chat->>Ret: Prefetch (rewritten query ± vector)
+  Ret-->>Chat: Hits
+  Chat->>Chat: Put hits in retrieval_cache
+  Chat->>Agent: Grounded user message + cache
+  opt Agent needs more passages
+    Agent->>Tool: retrieve_paper_context(query)
+    Tool->>Tool: Cache hit? else search_paper_chunks
+    Tool-->>Agent: JSON paper passages
+  end
+```
+
+1. **Prefetch** — Before the agent runs, chat rewrites (if needed), searches once, and injects passages into the grounded user prompt.
+2. **Tool** — `retrieve_paper_context` searches again only when the agent needs more context; identical normalized queries reuse the prefetch cache.
+
+#### Pipeline (`search_paper_chunks`)
+
+```mermaid
+flowchart TD
+  In[Query string] --> Clean[Whitespace normalize]
+  Clean --> Empty{Empty?}
+  Empty -->|yes| None[Return]
+  Empty -->|no| Recall
+
+  subgraph Recall["Parallel recall — limit RAG_CANDIDATE_K"]
+    Dense["_dense_search<br/>embed_query_cached → Qdrant cosine<br/>Filter: paper_id"]
+    Key["_keyword_search<br/>plainto_tsquery + ts_rank_cd<br/>section.title ‖ chunk.content"]
+  end
+
+  Clean --> Dense
+  Clean --> Key
+  Dense --> RRF["reciprocal_rank_fusion<br/>score += 1 / (RAG_RRF_K + rank)"]
+  Key --> RRF
+  RRF --> Order[Sort by fused score · take candidate_k]
+  Order --> Hydrate["_hydrate_chunks<br/>load text + section metadata from PG"]
+  Hydrate --> Pref["_prefilter_hits<br/>drop below RAG_MIN_SCORE<br/>unless in top keyword IDs"]
+  Pref --> Pool[Truncate to rerank pool<br/>min of RAG_RERANK_MAX_CANDIDATES,<br/>max(2×TOP_K, 12), CANDIDATE_K]
+  Pool --> Rerank["rerank_hits listwise LLM<br/>or passthrough if disabled / local model"]
+  Rerank --> Thr["_apply_rerank_threshold<br/>RAG_MIN_SCORE; fallback top 3"]
+  Thr --> Primaries[Take RAG_TOP_K]
+  Primaries --> Exp["_expand_neighbors<br/>± RAG_NEIGHBOR_WINDOW in section<br/>inherited score × 0.9"]
+  Exp --> Dedup[_dedupe_hits]
+  Dedup --> Out["_strip_internal_fields<br/>cap RAG_MAX_CONTEXT_CHUNKS"]
+```
+
+| Step | Module | Behavior |
+| --- | --- | --- |
+| Query rewrite | `will_rewrite_retrieval_query` / `rewrite_retrieval_query` in `src/rag/query_rewrite.py` | If `RAG_QUERY_REWRITE_ENABLED` and history has anaphora (`it`, `this`, `those`, …), LLM rewrites to a standalone paper search query |
+| Speculative embed | `ChatService.stream_message` + `embed_query_cached` | When rewrite is likely, embed the original question in parallel; reuse the vector only if the rewritten query equals the original (`normalize_retrieval_query`) |
+| Dense | `_dense_search` | `embed_query_cached` → Qdrant collection `papers` (cosine), must-match `paper_id` |
+| Keyword | `_keyword_search` | English FTS via `plainto_tsquery` over `section.title + chunk.content`, ranked with `ts_rank_cd` |
+| RRF | `reciprocal_rank_fusion` | Fuse dense + keyword ID rankings with constant `RAG_RRF_K` (default `60`) |
+| Hydrate | `_hydrate_chunks` | Resolve chunk IDs to text, section title, and indices for prompting / citations |
+| Prefilter | `_prefilter_hits` | Drop low fused scores (`RAG_MIN_SCORE`) while keeping strong keyword hits |
+| Rerank | `rerank_hits` in `src/rag/rerank.py` | Listwise LLM reorder when `RAG_RERANK_ENABLED`; skipped for local/loopback chat models; falls back to input order on failure |
+| Threshold | `_apply_rerank_threshold` | Re-apply `RAG_MIN_SCORE` after rerank; if everything is filtered, keep a small top fallback |
+| Neighbors | `_expand_neighbors` | Add adjacent chunk indices in the same section (inherited score × `0.9`) so the model sees surrounding sentences |
+| Cap | `_dedupe_hits` + `_strip_internal_fields` | Deduplicate, strip internal fields, truncate to `RAG_MAX_CONTEXT_CHUNKS` |
+
+#### Tunables
+
+| Variable | Default | Role |
+| --- | --- | --- |
+| `RAG_TOP_K` | `8` | Primary hits after rerank |
+| `RAG_CANDIDATE_K` | `20` | Dense / keyword recall pool before fusion |
+| `RAG_MIN_SCORE` | `0.15` | Floor after fusion / rerank |
+| `RAG_RRF_K` | `60` | Reciprocal-rank fusion constant |
+| `RAG_NEIGHBOR_WINDOW` | `1` | Adjacent chunks on each side |
+| `RAG_RERANK_ENABLED` | `true` | Listwise LLM rerank |
+| `RAG_RERANK_MAX_CANDIDATES` | `15` | Max passages sent to the reranker |
+| `RAG_MAX_CONTEXT_CHUNKS` | `12` | Hard cap after neighbor expansion |
+| `RAG_QUERY_REWRITE_ENABLED` | `true` | Conversational query rewrite |
+| `RAG_EMBED_CACHE_SIZE` | `256` | In-process embedding cache size |
 
 SSE event types:
 
@@ -113,6 +242,23 @@ SSE event types:
 | `message.assistant.delta` | `{ "delta": "..." }` streaming token |
 | `message.assistant.done` | Full assistant message with `citations: { paper, openalex, web }` |
 | `error` | `{ "detail": "..." }` |
+
+### Auth
+
+```mermaid
+flowchart TD
+  subgraph Provisioning
+    WH[Clerk webhook<br/>user.created / updated / deleted] --> US[UserService upsert / delete]
+    ME[GET /users/me] --> Lazy[get_or_create_from_clerk]
+    Lazy --> US
+  end
+
+  subgraph Request auth
+    Req[API request + Bearer JWT] --> Val[validate_user_session]
+    Val -->|ok| Local[Resolve local user]
+    Val -->|invalid| 401[Unauthorized]
+  end
+```
 
 ## Project layout
 
@@ -324,6 +470,26 @@ Configure the webhook URL in the Clerk dashboard. For local dev, use a tunnel so
 
 Celery task `process_paper` (`src/worker/process_paper.py`):
 
+```mermaid
+flowchart TD
+  S1[Mark processing] --> S2[Download PDF<br/>OpenAlex / arXiv OA]
+  S2 --> S3[SHA-256 + upload R2<br/>pdfs/paper_id.pdf]
+  S3 --> S4[GROBID section parse]
+  S4 --> S5[RecursiveCharacterTextSplitter<br/>size 600 · overlap 150]
+  S5 --> S6[Persist sections + chunks in PG]
+  S6 --> S7[Embed chunks]
+  S7 --> S8[Upsert Qdrant papers<br/>payload: paper_id, section_id, chunk_index]
+  S8 --> S9[Mark ready]
+  S1 -.->|any error| Fail[Mark failed]
+  S2 -.-> Fail
+  S3 -.-> Fail
+  S4 -.-> Fail
+  S5 -.-> Fail
+  S6 -.-> Fail
+  S7 -.-> Fail
+  S8 -.-> Fail
+```
+
 1. Mark paper `processing`
 2. Download PDF from OpenAlex / arXiv OA URLs
 3. SHA-256 hash the file and upload to R2 at `pdfs/{paper_id}.pdf`
@@ -334,6 +500,60 @@ Celery task `process_paper` (`src/worker/process_paper.py`):
 8. Mark paper `ready`, or `failed` on error
 
 ## Data model (high level)
+
+```mermaid
+erDiagram
+  users ||--o{ user_papers : assigns
+  papers ||--o{ user_papers : assigned_to
+  papers ||--o{ sections : has
+  sections ||--o{ chunks : contains
+  papers ||--o{ chats : scoped_to
+  users ||--o{ chats : owns
+  chats ||--o{ messages : contains
+
+  users {
+    uuid uid PK
+    string email
+    string clerk_user_id
+    string role
+  }
+  papers {
+    uuid uid PK
+    string openalex_id
+    string title
+    string status
+    string r2_key
+  }
+  user_papers {
+    uuid user_id PK_FK
+    uuid paper_id PK_FK
+    string[] custom_tags
+  }
+  sections {
+    uuid uid PK
+    uuid paper_id FK
+    string title
+  }
+  chunks {
+    uuid uid PK
+    uuid section_id FK
+    int chunk_index
+    text content
+  }
+  chats {
+    uuid uid PK
+    uuid user_id FK
+    uuid paper_id FK
+    string title
+  }
+  messages {
+    uuid uid PK
+    uuid chat_id FK
+    string role
+    text content
+    json citations
+  }
+```
 
 | Table | Role |
 | --- | --- |

@@ -15,23 +15,59 @@ Inquiro is a research paper reading room: find papers through OpenAlex, ingest P
 
 ## Architecture
 
-```
-Browser (TanStack Start :3000)
-  │  Clerk session JWT on API calls
-  ▼
-FastAPI (:8000)
-  ├── PostgreSQL     users, papers, chats, messages, sections, chunks
-  │                  (+ full-text keyword channel for hybrid RAG)
-  ├── Celery + Redis background paper processing
-  ├── Qdrant         chunk vectors (1024-dim, cosine)
-  ├── Cloudflare R2  stored PDFs
-  ├── GROBID         section parsing (:8070)
-  └── OpenAI-compatible API
-        ├── embeddings (ingest + retrieval)
-        ├── chat model (LangGraph agent)
-        ├── optional query rewrite / rerank models
-        ├── OpenAlex tool (scholarly related-work search)
-        └── optional Tavily (non-scholarly web background)
+```mermaid
+flowchart TB
+  subgraph Client["Browser — TanStack Start :3000"]
+    UI[Explore · Library · Papers · Chat + PDF]
+    ClerkClient[Clerk session]
+  end
+
+  subgraph API["FastAPI :8000"]
+    Routers[Routers /api/v1]
+    Services[Services]
+    Agent[LangGraph ReAct agent]
+    RAG[Hybrid RAG]
+  end
+
+  subgraph Data["Data & infra"]
+    PG[(PostgreSQL<br/>users · papers · chats · FTS)]
+    Qdrant[(Qdrant<br/>chunk vectors)]
+    R2[(Cloudflare R2<br/>PDFs)]
+    Redis[(Redis)]
+  end
+
+  subgraph Workers["Background"]
+    Celery[Celery worker]
+    GROBID[GROBID :8070]
+  end
+
+  subgraph External["External APIs"]
+    OpenAlex[OpenAlex]
+    LLM[OpenAI-compatible<br/>embed · chat · rewrite · rerank]
+    Tavily[Tavily optional]
+    ClerkAPI[Clerk]
+  end
+
+  UI -->|Bearer JWT| Routers
+  ClerkClient --> ClerkAPI
+  Routers --> Services
+  Services --> PG
+  Services --> Agent
+  Services --> RAG
+  RAG --> Qdrant
+  RAG --> PG
+  Agent --> LLM
+  Agent --> OpenAlex
+  Agent -.-> Tavily
+  Services -->|enqueue| Redis
+  Redis --> Celery
+  Celery --> OpenAlex
+  Celery --> R2
+  Celery --> GROBID
+  Celery --> PG
+  Celery --> Qdrant
+  Celery --> LLM
+  Routers -->|webhooks| ClerkAPI
 ```
 
 ### Monorepo layout
@@ -45,9 +81,47 @@ FastAPI (:8000)
 
 ### Find → Read → Ask
 
+```mermaid
+flowchart LR
+  Find[Find paper<br/>Explore / Library / Papers] --> Ingest[Ingest by OpenAlex ID]
+  Ingest --> Wait{Status?}
+  Wait -->|pending / processing| Wait
+  Wait -->|ready| Read[Open chat session<br/>PDF beside chat]
+  Wait -->|failed| Retry[Retry / reprocess]
+  Read --> Ask[Ask grounded questions<br/>SSE streaming answers]
+```
+
 1. **Find** — Search OpenAlex from Explore, or browse your Library / Papers catalog.
 2. **Read** — Ingest a paper by OpenAlex ID. When status is `ready`, open a chat session; the PDF loads beside the conversation.
 3. **Ask** — Send a message; the assistant answers using hybrid-retrieved paper passages, OpenAlex metadata when needed, and optional web background.
+
+### Paper ingest (overview)
+
+```mermaid
+sequenceDiagram
+  participant UI as Frontend
+  participant API as FastAPI
+  participant DB as PostgreSQL
+  participant Worker as Celery
+  participant OA as OpenAlex
+  participant R2 as Cloudflare R2
+  participant G as GROBID
+  participant Q as Qdrant
+
+  UI->>API: POST /papers/upload {openalex_id}
+  API->>DB: Create / assign paper (pending)
+  API-->>UI: 202 Accepted
+  API->>Worker: process_paper(paper_id)
+  Worker->>DB: status = processing
+  Worker->>OA: Download OA PDF
+  Worker->>R2: Store pdfs/{paper_id}.pdf
+  Worker->>G: Parse sections
+  Worker->>DB: Persist sections + chunks
+  Worker->>Q: Embed + upsert vectors
+  Worker->>DB: status = ready
+```
+
+Paper status: `pending` → `processing` → `ready` or `failed`.
 
 ### Chat message flow
 
@@ -55,25 +129,72 @@ FastAPI (:8000)
 sequenceDiagram
   participant UI as Frontend
   participant API as FastAPI
-  participant RAG as HybridRAG
-  participant Agent as LangGraphAgent
+  participant RAG as Hybrid RAG
+  participant Agent as LangGraph agent
   participant DB as PostgreSQL
 
   UI->>API: POST /sessions/{id}/messages (SSE)
   API->>DB: Save user message
+  API-->>UI: message.user
   API->>API: Optional query rewrite (anaphora)
-  API->>RAG: Dense (Qdrant) + keyword (Postgres) → RRF → rerank
+  API->>RAG: Dense + keyword → RRF → rerank → neighbors
   API->>Agent: Grounded prompt + history
   loop Streaming
     Agent->>API: Token deltas / tool results
     Note over Agent,API: Tools: retrieve_paper_context, search_openalex_works, optional Tavily
-    API->>UI: SSE message.assistant.delta
+    API-->>UI: chat.phase · message.assistant.delta
   end
-  API->>DB: Save assistant message + paper/openalex/web citations
-  API->>UI: SSE message.assistant.done
+  API->>DB: Save assistant message + citations
+  API-->>UI: message.assistant.done
 ```
 
-Paper ingest runs asynchronously: `pending` → `processing` → `ready` or `failed`.
+### Retrieval process
+
+Every chat turn runs hybrid retrieval over the **attached paper only** (`paper_id` filter). Results are prefetched into the agent cache, then reused if the agent calls `retrieve_paper_context` with the same query.
+
+```mermaid
+flowchart TD
+  U[User question] --> RW{Anaphora + history?<br/>RAG_QUERY_REWRITE_ENABLED}
+  RW -->|yes| Rewrite[LLM rewrite → standalone query]
+  RW -->|no| Q[Normalized query]
+  Rewrite --> Q
+  RW -.->|speculative| Emb[Start embed of original query]
+  Emb -->|rewrite unchanged| Reuse[Reuse query vector]
+  Emb -->|rewrite changed| Drop[Discard speculative embed]
+
+  Q --> Parallel
+  Reuse --> Dense
+  Drop --> Dense
+
+  subgraph Parallel["Parallel recall — RAG_CANDIDATE_K"]
+    Dense[Dense: embed → Qdrant cosine<br/>filter paper_id]
+    Keyword[Keyword: Postgres FTS<br/>ts_rank_cd on section+chunk]
+  end
+
+  Dense --> RRF[Reciprocal rank fusion<br/>RAG_RRF_K]
+  Keyword --> RRF
+  RRF --> Hydrate[Hydrate chunk text from Postgres]
+  Hydrate --> Pref[Score prefilter<br/>RAG_MIN_SCORE]
+  Pref --> Rerank[Optional listwise LLM rerank<br/>RAG_RERANK_ENABLED]
+  Rerank --> Top[Keep RAG_TOP_K primaries]
+  Top --> Neigh[Expand ± RAG_NEIGHBOR_WINDOW<br/>same section]
+  Neigh --> Cap[Dedupe · cap RAG_MAX_CONTEXT_CHUNKS]
+  Cap --> Cache[Prefetch cache + grounded prompt]
+  Cache --> Agent[LangGraph agent]
+  Agent -->|retrieve_paper_context| Cache
+```
+
+| Stage | What happens |
+| --- | --- |
+| Query rewrite | Turns follow-ups like “what about **that** method?” into a standalone search query when history has anaphora |
+| Speculative embed | If rewrite is likely, embedding of the original question starts in parallel; reused only when the rewrite leaves the query unchanged |
+| Dense | OpenAI-compatible embedding → Qdrant cosine search, filtered by `paper_id` |
+| Keyword | Postgres `plainto_tsquery` / `ts_rank_cd` over section title + chunk text for the same paper |
+| RRF | Merges the two ranked ID lists without needing calibrated scores |
+| Rerank | Optional listwise LLM reorder (skipped for local/loopback chat models) |
+| Neighbors | Pulls adjacent chunks in the same section so answers keep local context |
+
+Implementation: [`backend/src/rag/retrieval.py`](backend/src/rag/retrieval.py) (`search_paper_chunks`). Full step detail and knobs: [Backend README — Retrieval process](backend/README.md#retrieval-process).
 
 ## Tech stack
 
@@ -116,7 +237,7 @@ Before setup, have the following available:
 - **Clerk** application (publishable + secret keys, webhook signing secret)
 - **Cloudflare R2** bucket and API credentials
 - **OpenAlex API key** (recommended for higher rate limits)
-- **OpenAI-compatible provider** for embeddings (1024-dimensional vectors) and chat
+- **OpenAI-compatible provider** for embeddings and chat (same embedding model for ingest and query)
 - **Tavily API key** (optional — enables web background search in chat)
 
 ## Full-stack setup
@@ -283,7 +404,7 @@ Copy from [`backend/.env.example`](backend/.env.example). Loaded by [`backend/sr
 
 `REDIS_URL` defaults to `redis://localhost:6379/0` if unset.
 
-Embeddings must produce **1024-dimensional** vectors to match the Qdrant collection.
+The Qdrant `papers` collection is created with the live embedding model’s dimension (see `ensure_collection` in the backend). Keep ingest and query embeddings on the same model.
 
 ### Frontend (`frontend/.env.local`)
 
@@ -303,5 +424,6 @@ Never expose `CLERK_SECRET_KEY` in client bundles; it is used only on the server
 
 ## Further reading
 
-- [Backend README](backend/README.md) — API reference, paper pipeline, data model, poe commands
-- [Frontend README](frontend/README.md) — routes, auth wiring, frontend dev scripts
+- [Backend README — Retrieval process](backend/README.md#retrieval-process) — prefetch vs tool, full `search_paper_chunks` pipeline, RAG tunables
+- [Backend README](backend/README.md) — API reference, ingest / RAG / auth diagrams, ER model, poe commands
+- [Frontend README](frontend/README.md) — route map, chat workspace diagram, auth wiring, dev scripts

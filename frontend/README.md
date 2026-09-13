@@ -13,6 +13,24 @@ For full-stack setup (PostgreSQL, backend, Clerk, R2), see the [root README](../
 
 ## Routes
 
+```mermaid
+flowchart TB
+  Root["/"] -->|guest| Landing[Landing]
+  Root -->|signed in| Explore
+  Auth["/sign-in · /sign-up"] --> Dashboard
+
+  subgraph Dashboard["/dashboard — requireAuth"]
+    Explore["/explore"] --> Work["/explore/$workId"]
+    Library["/library"]
+    Papers["/papers"]
+    Chats["/chats"] --> Session["/chats/$sessionId<br/>PDF + chat workspace"]
+  end
+
+  Work -->|ingest| Library
+  Library -->|start chat| Session
+  Papers -->|start chat| Session
+```
+
 | Route | Access | Purpose |
 | --- | --- | --- |
 | `/` | Guest | Landing page |
@@ -37,11 +55,47 @@ Routes live under `src/routes/` using TanStack Router file-based routing.
 | [`src/lib/auth.ts`](src/lib/auth.ts) | `requireAuth` / `requireGuest` server functions |
 | [`src/lib/me.ts`](src/lib/me.ts) | Current user profile from backend |
 
-Chat UI components: `src/components/chats/` (`chat-workspace`, `session-chat`, `message-citations`, `pdf-folio`).
+### Chat workspace
+
+```mermaid
+flowchart TB
+  Route["$sessionId route"] --> CW[ChatWorkspace]
+  CW --> Panels[ResizablePanelGroup]
+  Panels --> PDF[PdfFolio / PdfViewer]
+  Panels --> Chat[SessionChat]
+  Chat --> Stream[streamSessionMessage SSE]
+  Chat --> MD[AssistantMarkdown]
+  Chat --> Cite[MessageCitations<br/>paper · openalex · web]
+  Stream --> API["POST /sessions/{id}/messages"]
+  PDF --> PDFAPI["GET /papers/{id}/pdf-url"]
+```
+
+Chat UI components: `src/components/chats/` (`chat-workspace`, `session-chat`, `assistant-markdown`, `message-citations`, `pdf-folio`, `pdf-viewer`).
 
 Assistant messages expose structured citations (`paper`, `openalex`, `web`) via `parseMessageCitations` in `sessions.ts`. The Sources panel in `message-citations.tsx` links OpenAlex works into Explore when an ID is present.
 
 ## Auth
+
+```mermaid
+sequenceDiagram
+  participant Browser
+  participant Start as TanStack Start
+  participant Clerk
+  participant API as FastAPI
+
+  Browser->>Start: Request /dashboard/*
+  Start->>Clerk: clerkMiddleware + requireAuth
+  alt Not signed in
+    Clerk-->>Browser: Redirect /sign-in
+  else Signed in
+    Start-->>Browser: Render dashboard
+    Browser->>Start: Server fn (sessions, papers, …)
+    Start->>Clerk: Session token
+    Start->>API: Authorization: Bearer JWT
+    API-->>Start: JSON / SSE
+    Start-->>Browser: Data / stream
+  end
+```
 
 - [`src/start.ts`](src/start.ts) registers `clerkMiddleware()` on every server request
 - Dashboard routes call `requireAuth` in `beforeLoad` ([`src/routes/dashboard/route.tsx`](src/routes/dashboard/route.tsx))

@@ -382,6 +382,7 @@ class ChatService:
                 kind = event.get("event")
                 if kind == "on_tool_start":
                     tool_name = str(event.get("name") or "")
+
                     if tool_name == "search_openalex_works":
                         yield (
                             "chat.phase",
@@ -398,6 +399,7 @@ class ChatService:
                                 "label": "Searching the web…",
                             },
                         )
+
                     continue
 
                 if kind == "on_chat_model_stream":
@@ -414,6 +416,7 @@ class ChatService:
                             search_ms,
                             ttft_ms,
                         )
+
                     if not writing_phase_sent:
                         writing_phase_sent = True
                         yield (
@@ -423,6 +426,7 @@ class ChatService:
                                 "label": "Writing…",
                             },
                         )
+
                     assistant_parts.append(text)
                     yield ("message.assistant.delta", {"delta": text})
 
