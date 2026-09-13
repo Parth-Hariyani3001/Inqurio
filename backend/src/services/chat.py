@@ -106,6 +106,65 @@ def _merge_web_citations(
         seen.add(url)
 
 
+def _merge_openalex_citations(
+    bucket: list[dict[str, Any]],
+    payload: Any,
+) -> None:
+    items: list[Any]
+    if isinstance(payload, dict):
+        items = payload.get("openalex") or payload.get("results") or []
+    elif isinstance(payload, list):
+        items = payload
+    else:
+        return
+
+    seen: set[str] = set()
+    for item in bucket:
+        if not isinstance(item, dict):
+            continue
+        work_id = item.get("id")
+        doi = item.get("doi")
+        if work_id:
+            seen.add(str(work_id))
+        if doi:
+            seen.add(str(doi))
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        work_id = item.get("id")
+        doi = item.get("doi")
+        display_name = item.get("display_name") or item.get("title")
+        if not display_name:
+            continue
+
+        key = str(work_id) if work_id else (str(doi) if doi else "")
+        if not key or key in seen:
+            continue
+
+        authors = item.get("authors") or []
+        if not isinstance(authors, list):
+            authors = []
+
+        bucket.append(
+            {
+                "id": str(work_id) if work_id else key,
+                "display_name": str(display_name),
+                "doi": str(doi) if doi else None,
+                "publication_year": item.get("publication_year"),
+                "authors": [str(author) for author in authors if author],
+                "venue": str(item["venue"]) if item.get("venue") else None,
+                "cited_by_count": int(item.get("cited_by_count") or 0),
+                "is_oa": bool(item.get("is_oa")),
+            }
+        )
+        seen.add(key)
+        if work_id:
+            seen.add(str(work_id))
+        if doi:
+            seen.add(str(doi))
+
+
 def _ingest_tool_output(
     citations: dict[str, list[dict[str, Any]]],
     tool_name: str,
@@ -121,6 +180,10 @@ def _ingest_tool_output(
     name = tool_name.lower()
     if "retrieve_paper" in name or name == "retrieve_paper_context":
         _merge_paper_citations(citations["paper"], parsed)
+        return
+
+    if "openalex" in name or name == "search_openalex_works":
+        _merge_openalex_citations(citations["openalex"], parsed)
         return
 
     if (
@@ -173,6 +236,7 @@ class ChatService:
 
         if len(cleaned) > 8000:
             raise BadRequestError(message="Message is too long")
+
         chat = await self.session_service._get_chat_for_user(
             session_id,
             user_id,
@@ -194,6 +258,13 @@ class ChatService:
         await session.refresh(user_message)
 
         yield ("message.user", {"message": _message_response(user_message)})
+        yield (
+            "chat.phase",
+            {
+                "phase": "understanding",
+                "label": "Understanding your question…",
+            },
+        )
 
         history_result = await session.exec(
             select(Message)
@@ -201,12 +272,15 @@ class ChatService:
             .order_by(col(Message.created_at).asc())
         )
         history = list(history_result.all())
-        # Exclude the just-saved user turn from history; it is sent as the new HumanMessage.
+
+        # Get the latest messages (excluding the current question)
+        # Top 20 messages are included
         prior = [message for message in history if message.uid != user_message.uid]
         lc_messages = history_to_langchain_messages(prior)
 
         turn_started = time.perf_counter()
         rewrite_started = time.perf_counter()
+
         speculative_embed: asyncio.Task[list[float]] | None = None
         if will_rewrite_retrieval_query(cleaned, history=lc_messages):
             speculative_embed = asyncio.create_task(
@@ -220,6 +294,8 @@ class ChatService:
         )
         rewrite_ms = (time.perf_counter() - rewrite_started) * 1000
 
+        # We're checking if the query vector coming from cache is similar to the user's question
+        # If it is similar to user's question then use it else cancel the cache task result
         query_vector: list[float] | None = None
         if speculative_embed is not None:
             if normalize_retrieval_query(retrieval_query) == normalize_retrieval_query(
@@ -228,14 +304,25 @@ class ChatService:
                 try:
                     query_vector = await speculative_embed
                 except Exception:
-                    logger.exception("chat.speculative_embed failed; falling back")
+                    logger.exception(
+                        "chat.speculative_embed failed; falling back")
+
                     query_vector = None
             else:
                 speculative_embed.cancel()
+
                 try:
                     await speculative_embed
                 except (asyncio.CancelledError, Exception):
                     pass
+
+        yield (
+            "chat.phase",
+            {
+                "phase": "searching",
+                "label": "Searching the paper…",
+            },
+        )
 
         retrieval_cache: dict[str, list[dict[str, Any]]] = {}
         retrieval_started = time.perf_counter()
@@ -244,6 +331,7 @@ class ChatService:
             retrieval_query,
             query_vector=query_vector,
         )
+
         search_ms = (time.perf_counter() - retrieval_started) * 1000
         logger.info(
             "chat.prestream_rag rewrite_ms=%.1f search_ms=%.1f total_ms=%.1f hits=%d"
@@ -254,7 +342,9 @@ class ChatService:
             len(paper_hits),
             "reused" if query_vector is not None else "none",
         )
-        retrieval_cache[normalize_retrieval_query(retrieval_query)] = paper_hits
+        retrieval_cache[normalize_retrieval_query(
+            retrieval_query)] = paper_hits
+
         lc_messages.append(
             HumanMessage(content=build_grounded_user_message(
                 cleaned, paper_hits))
@@ -265,10 +355,24 @@ class ChatService:
             paper_title,
             retrieval_cache=retrieval_cache,
         )
-        citations: dict[str, list[dict[str, Any]]] = {"paper": [], "web": []}
+
+        citations: dict[str, list[dict[str, Any]]] = {
+            "paper": [],
+            "web": [],
+            "openalex": [],
+        }
         _merge_paper_citations(citations["paper"], {"paper": paper_hits})
         assistant_parts: list[str] = []
         ttft_ms: float | None = None
+        writing_phase_sent = False
+
+        yield (
+            "chat.phase",
+            {
+                "phase": "thinking",
+                "label": "Thinking…",
+            },
+        )
 
         try:
             async for event in agent.astream_events(
@@ -276,6 +380,26 @@ class ChatService:
                 version="v2",
             ):
                 kind = event.get("event")
+                if kind == "on_tool_start":
+                    tool_name = str(event.get("name") or "")
+                    if tool_name == "search_openalex_works":
+                        yield (
+                            "chat.phase",
+                            {
+                                "phase": "searching_openalex",
+                                "label": "Searching OpenAlex…",
+                            },
+                        )
+                    elif tool_name == "search_paper_background":
+                        yield (
+                            "chat.phase",
+                            {
+                                "phase": "searching_web",
+                                "label": "Searching the web…",
+                            },
+                        )
+                    continue
+
                 if kind == "on_chat_model_stream":
                     chunk = event.get("data", {}).get("chunk")
                     text = _token_text(getattr(chunk, "content", None))
@@ -290,13 +414,22 @@ class ChatService:
                             search_ms,
                             ttft_ms,
                         )
+                    if not writing_phase_sent:
+                        writing_phase_sent = True
+                        yield (
+                            "chat.phase",
+                            {
+                                "phase": "writing",
+                                "label": "Writing…",
+                            },
+                        )
                     assistant_parts.append(text)
                     yield ("message.assistant.delta", {"delta": text})
 
                 elif kind == "on_tool_end":
                     tool_name = str(event.get("name") or "")
                     tool_output = event.get("data", {}).get("output")
-                    if hasattr(tool_output, "content"):
+                    if tool_output is not None and hasattr(tool_output, "content"):
                         tool_output = tool_output.content
 
                     _ingest_tool_output(citations, tool_name, tool_output)

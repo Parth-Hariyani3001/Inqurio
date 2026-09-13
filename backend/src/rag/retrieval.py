@@ -45,9 +45,11 @@ async def _dense_search(
     query_vector: list[float] | None = None,
 ) -> list[tuple[UUID, float]]:
     started = time.perf_counter()
+
     if query_vector is None:
         query_vector = await asyncio.to_thread(embed_query_cached, query)
         embed_ms = (time.perf_counter() - started) * 1000
+
         logger.info("rag.dense.embed elapsed_ms=%.1f source=embed", embed_ms)
     else:
         logger.info("rag.dense.embed elapsed_ms=0.0 source=precomputed")
@@ -75,12 +77,15 @@ async def _dense_search(
             chunk_id = UUID(str(point.id))
         except ValueError:
             continue
+
         results.append((chunk_id, float(point.score or 0.0)))
+
     logger.info(
         "rag.dense.qdrant elapsed_ms=%.1f hits=%d",
         (time.perf_counter() - qdrant_started) * 1000,
         len(results),
     )
+
     return results
 
 
@@ -96,11 +101,14 @@ async def _keyword_search(
         return []
 
     started = time.perf_counter()
+
     ts_query = func.plainto_tsquery("english", cleaned)
     document = func.to_tsvector(
         "english",
         func.concat(Section.title, literal_column("' '"), Chunk.content),
     )
+
+    # It ranks the similartiy between the document and query
     rank = func.ts_rank_cd(document, ts_query)
 
     async with SessionLocal() as session:
@@ -112,6 +120,7 @@ async def _keyword_search(
             .order_by(rank.desc())
             .limit(limit)
         )
+
         result = await session.exec(statement)
         rows = result.all()
 
@@ -121,6 +130,7 @@ async def _keyword_search(
         (time.perf_counter() - started) * 1000,
         len(results),
     )
+
     return results
 
 
@@ -185,9 +195,11 @@ async def _expand_neighbors(hits: list[dict], *, window: int) -> list[dict]:
         parent_score = float(hit.get("score") or 0.0)
         section_key = str(section_id)
         base_index = int(index)
+
         for offset in range(-window, window + 1):
             if offset == 0:
                 continue
+
             neighbor_key = (section_key, base_index + offset)
             inherited = parent_score * 0.9
             neighbor_scores[neighbor_key] = max(
@@ -195,11 +207,13 @@ async def _expand_neighbors(hits: list[dict], *, window: int) -> list[dict]:
                 inherited,
             )
 
-    present_positions = {
-        (str(hit.get("section_id")), int(hit.get("chunk_index")))
-        for hit in hits
-        if hit.get("section_id") is not None and hit.get("chunk_index") is not None
-    }
+    present_positions: set[tuple[str, int]] = set()
+    for hit in hits:
+        section_id = hit.get("section_id")
+        chunk_index = hit.get("chunk_index")
+        if section_id is not None and chunk_index is not None:
+            present_positions.add((str(section_id), int(str(chunk_index))))
+
     needed_neighbors = {
         key for key in neighbor_scores if key not in present_positions
     }
@@ -257,12 +271,15 @@ async def _expand_neighbors(hits: list[dict], *, window: int) -> list[dict]:
 def _dedupe_hits(hits: list[dict]) -> list[dict]:
     seen: set[str] = set()
     unique: list[dict] = []
+
     for hit in hits:
         chunk_id = str(hit.get("chunk_id") or "")
         if not chunk_id or chunk_id in seen:
             continue
+
         seen.add(chunk_id)
         unique.append(hit)
+
     return unique
 
 
@@ -307,10 +324,13 @@ def _apply_rerank_threshold(ranked: list[dict]) -> list[dict]:
         for hit in ranked
         if float(hit.get("score") or 0.0) >= Config.rag_min_score
     ]
+
     if thresholded:
         return thresholded
+
     if ranked:
         return ranked[: min(3, len(ranked))]
+
     return ranked
 
 
@@ -322,14 +342,18 @@ async def search_paper_chunks(
     query_vector: list[float] | None = None,
 ) -> list[dict]:
     """Hybrid dense + keyword retrieval with RRF, rerank, and neighbor expansion."""
+
+    # Clean the query
     cleaned = " ".join((query or "").split())
     if not cleaned:
         return []
 
+    # Config for pipeline
     pipeline_started = time.perf_counter()
     final_k = top_k or Config.rag_top_k
     recall_k = Config.rag_candidate_k
     max_context = Config.rag_max_context_chunks
+
     # Cap LLM rerank input: prefer config, else ~2x top_k (min 12).
     rerank_pool = min(
         Config.rag_rerank_max_candidates,
@@ -337,6 +361,8 @@ async def search_paper_chunks(
         recall_k,
     )
 
+    # Perform the dense search(vector)
+    # Perform the keyword search(PG Database)
     dense_hits, keyword_hits = await asyncio.gather(
         _dense_search(
             paper_id,
@@ -395,4 +421,5 @@ async def search_paper_chunks(
         len(rerank_candidates),
         len(result),
     )
+
     return result

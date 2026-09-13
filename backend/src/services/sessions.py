@@ -30,10 +30,13 @@ class SessionService:
             col(Chat.uid) == session_id,
             col(Chat.user_id) == user_id,
         )
+
         result = await session.exec(statement)
+
         chat = result.first()
         if not chat:
             raise NotFoundError(message="Session not found")
+
         return chat
 
     async def create_session(

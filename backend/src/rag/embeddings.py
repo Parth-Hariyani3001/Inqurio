@@ -45,12 +45,13 @@ def embed_query_cached(query: str) -> list[float]:
                 return list(cached)
 
     vector = embeddings.embed_query(query)
-
     if max_size > 0:
         with _cache_lock:
             _embed_cache[key] = list(vector)
             _embed_cache.move_to_end(key)
             while len(_embed_cache) > max_size:
                 _embed_cache.popitem(last=False)
+
         logger.info("rag.dense.embed_cache miss key_len=%d", len(key))
+
     return vector

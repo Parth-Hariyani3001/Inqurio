@@ -92,9 +92,21 @@ export type WebCitation = {
   snippet: string
 }
 
+export type OpenAlexCitation = {
+  id: string
+  display_name: string
+  doi: string | null
+  publication_year: number | null
+  authors: Array<string>
+  venue: string | null
+  cited_by_count: number
+  is_oa: boolean
+}
+
 export type MessageCitations = {
   paper: Array<PaperCitation>
   web: Array<WebCitation>
+  openalex: Array<OpenAlexCitation>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -108,6 +120,7 @@ export function parseMessageCitations(
 
   const paperRaw = Array.isArray(citations.paper) ? citations.paper : []
   const webRaw = Array.isArray(citations.web) ? citations.web : []
+  const openalexRaw = Array.isArray(citations.openalex) ? citations.openalex : []
 
   const paper: Array<PaperCitation> = []
   for (const item of paperRaw) {
@@ -133,8 +146,37 @@ export function parseMessageCitations(
     })
   }
 
-  if (paper.length === 0 && web.length === 0) return null
-  return { paper, web }
+  const openalex: Array<OpenAlexCitation> = []
+  for (const item of openalexRaw) {
+    if (!isRecord(item)) continue
+    const id = item.id
+    const displayName = item.display_name
+    if (typeof id !== 'string' || !id) continue
+    if (typeof displayName !== 'string' || !displayName) continue
+
+    const authorsRaw = Array.isArray(item.authors) ? item.authors : []
+    const authors = authorsRaw.filter(
+      (author): author is string => typeof author === 'string' && !!author,
+    )
+
+    openalex.push({
+      id,
+      display_name: displayName,
+      doi: typeof item.doi === 'string' && item.doi ? item.doi : null,
+      publication_year:
+        typeof item.publication_year === 'number' ? item.publication_year : null,
+      authors,
+      venue: typeof item.venue === 'string' && item.venue ? item.venue : null,
+      cited_by_count:
+        typeof item.cited_by_count === 'number' ? item.cited_by_count : 0,
+      is_oa: Boolean(item.is_oa),
+    })
+  }
+
+  if (paper.length === 0 && web.length === 0 && openalex.length === 0) {
+    return null
+  }
+  return { paper, web, openalex }
 }
 
 /** @deprecated Prefer parseMessageCitations for structured sources. */
@@ -148,14 +190,39 @@ export function citationLines(citations: unknown): Array<string> | null {
   for (const item of parsed.web) {
     lines.push(item.title)
   }
+  for (const item of parsed.openalex) {
+    lines.push(item.display_name)
+  }
   return lines.length > 0 ? lines : null
 }
 
+export type ChatPhase =
+  | 'understanding'
+  | 'searching'
+  | 'thinking'
+  | 'searching_web'
+  | 'searching_openalex'
+  | 'writing'
+
 export type StreamMessageHandlers = {
   onUserMessage?: (message: MessageResponse) => void
+  onPhase?: (phase: ChatPhase, label: string) => void
   onAssistantDelta?: (delta: string) => void
   onAssistantDone?: (message: MessageResponse) => void
   onError?: (detail: string) => void
+}
+
+const CHAT_PHASES = new Set<ChatPhase>([
+  'understanding',
+  'searching',
+  'thinking',
+  'searching_web',
+  'searching_openalex',
+  'writing',
+])
+
+function isChatPhase(value: unknown): value is ChatPhase {
+  return typeof value === 'string' && CHAT_PHASES.has(value as ChatPhase)
 }
 
 function parseSseBlock(block: string): { event: string; data: string } | null {
@@ -246,6 +313,12 @@ export async function streamSessionMessage(
 
       if (parsed.event === 'message.user' && isRecord(payload)) {
         handlers.onUserMessage?.(payload.message as MessageResponse)
+        continue
+      }
+      if (parsed.event === 'chat.phase' && isRecord(payload)) {
+        if (isChatPhase(payload.phase) && typeof payload.label === 'string') {
+          handlers.onPhase?.(payload.phase, payload.label)
+        }
         continue
       }
       if (parsed.event === 'message.assistant.delta' && isRecord(payload)) {

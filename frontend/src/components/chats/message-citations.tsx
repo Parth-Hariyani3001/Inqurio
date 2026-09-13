@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { ChevronRight, ExternalLink, FileText } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { BookOpen, ChevronRight, ExternalLink, FileText } from 'lucide-react'
 
 import {
   Attachment,
@@ -11,7 +12,8 @@ import {
 } from '@/components/ui/attachment'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
 import { cn } from '@/lib/utils'
-import type { MessageCitations } from '#/lib/sessions.ts'
+import { toOpenAlexWorkId } from '#/lib/papers.ts'
+import type { MessageCitations, OpenAlexCitation } from '#/lib/sessions.ts'
 
 function hostname(url: string) {
   try {
@@ -21,13 +23,28 @@ function hostname(url: string) {
   }
 }
 
+function openAlexSnippet(item: OpenAlexCitation) {
+  const authors = item.authors.slice(0, 3).join(', ')
+  const extras =
+    item.authors.length > 3 ? ` +${item.authors.length - 3}` : ''
+  const parts: Array<string> = []
+  if (authors) parts.push(`${authors}${extras}`)
+  if (item.publication_year) parts.push(String(item.publication_year))
+  if (item.venue) parts.push(item.venue)
+  if (item.cited_by_count > 0) {
+    parts.push(`${item.cited_by_count} citations`)
+  }
+  return parts.join(' · ')
+}
+
 export function MessageCitationsList({
   citations,
 }: {
   citations: MessageCitations
 }) {
   const [open, setOpen] = useState(false)
-  const count = citations.paper.length + citations.web.length
+  const count =
+    citations.paper.length + citations.web.length + citations.openalex.length
 
   return (
     <div className="flex flex-col gap-2">
@@ -75,6 +92,46 @@ export function MessageCitationsList({
                   </AttachmentContent>
                 </Attachment>
               ))}
+            </div>
+          ) : null}
+
+          {citations.openalex.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              {citations.openalex.map((item) => {
+                const workId = toOpenAlexWorkId(item.id)
+                const snippet = openAlexSnippet(item)
+                return (
+                  <Attachment
+                    key={item.id}
+                    className="w-full"
+                    size="sm"
+                    state="done"
+                  >
+                    <AttachmentMedia>
+                      <BookOpen />
+                    </AttachmentMedia>
+                    <AttachmentContent>
+                      <AttachmentTitle>{item.display_name}</AttachmentTitle>
+                      {snippet ? (
+                        <AttachmentDescription className="line-clamp-2 whitespace-normal">
+                          {snippet}
+                        </AttachmentDescription>
+                      ) : null}
+                    </AttachmentContent>
+                    <AttachmentTrigger
+                      aria-label={`Open ${item.display_name}`}
+                      render={(props) => (
+                        <Link
+                          {...props}
+                          to="/dashboard/explore/$workId"
+                          params={{ workId }}
+                          search={(prev) => prev}
+                        />
+                      )}
+                    />
+                  </Attachment>
+                )
+              })}
             </div>
           ) : null}
 

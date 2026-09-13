@@ -68,15 +68,17 @@ If the paper already exists, ingest assigns it to the current user instead of re
 ```
 POST /sessions/{id}/messages (SSE)
         │
-        ├── Save user message
+        ├── Save user message → message.user
+        ├── Emit chat.phase (understanding → searching → thinking)
         ├── Prefetch Qdrant chunks (RAG_TOP_K)
         ├── Build grounded user prompt (guardrails)
         ▼
    LangGraph ReAct agent
         ├── Tool: retrieve_paper_context (Qdrant + PostgreSQL)
         └── Tool: search_paper_background (Tavily, if TAVILY_API_KEY set)
+            → chat.phase searching_web
         │
-        ├── Stream token deltas → message.assistant.delta
+        ├── chat.phase writing → Stream token deltas → message.assistant.delta
         └── Persist assistant message + citations → message.assistant.done
 ```
 
@@ -87,6 +89,7 @@ SSE event types:
 | Event | Payload |
 | --- | --- |
 | `message.user` | Saved user message |
+| `chat.phase` | `{ "phase": "understanding\|searching\|thinking\|searching_web\|writing", "label": "..." }` status before/during generation |
 | `message.assistant.delta` | `{ "delta": "..." }` streaming token |
 | `message.assistant.done` | Full assistant message with citations |
 | `error` | `{ "detail": "..." }` |

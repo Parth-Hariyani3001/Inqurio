@@ -39,15 +39,17 @@ def _is_local_chat_model(
 
 def _get_rerank_model() -> ChatOpenAI:
     global _rerank_model
+
     if _rerank_model is None:
         _rerank_model = ChatOpenAI(
             model=Config.chat_model or "gpt-4o-mini",
             api_key=SecretStr(Config.ai_api_key),
             base_url=Config.ai_base_url or None,
             temperature=0,
-            max_tokens=256,
+            max_completion_tokens=256,
             streaming=False,
         )
+
     return _rerank_model
 
 
@@ -78,6 +80,7 @@ def _parse_ranked_ids(raw: str, allowed: set[str]) -> list[str]:
         chunk_id = str(item).strip()
         if chunk_id in allowed and chunk_id not in ordered:
             ordered.append(chunk_id)
+
     return ordered
 
 
@@ -106,6 +109,7 @@ async def rerank_hits(
         excerpt = str(hit.get("excerpt") or "").strip()
         if len(excerpt) > 600:
             excerpt = f"{excerpt[:599]}…"
+
         passages.append(
             f"{index}. chunk_id={hit.get('chunk_id')} "
             f"section={hit.get('section') or 'Unknown'}\n{excerpt}"
@@ -124,12 +128,14 @@ async def rerank_hits(
     try:
         model = _get_rerank_model()
         started = time.perf_counter()
+
         response = await model.ainvoke(prompt)
         logger.info(
             "rag.rerank elapsed_ms=%.1f candidates=%d",
             (time.perf_counter() - started) * 1000,
             len(hits),
         )
+
         content = response.content
         if isinstance(content, list):
             text = "".join(
@@ -156,5 +162,6 @@ async def rerank_hits(
                 ranked.append(hit)
 
         return ranked[:top_k]
+
     except Exception:
         return hits[:top_k]

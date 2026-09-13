@@ -35,14 +35,16 @@ def _get_rewrite_model() -> ChatOpenAI:
     if _rewrite_model is None:
         model = Config.rewrite_model or Config.chat_model or "gpt-4o-mini"
         base_url = Config.rewrite_ai_base_url or Config.ai_base_url or None
+
         _rewrite_model = ChatOpenAI(
             model=model,
             api_key=SecretStr(Config.ai_api_key),
             base_url=base_url,
             temperature=0,
-            max_tokens=64,
+            max_completion_tokens=64,
             streaming=False,
         )
+
     return _rewrite_model
 
 
@@ -60,10 +62,13 @@ def will_rewrite_retrieval_query(
     cleaned = user_query.strip()
     if not cleaned:
         return False
+
     if not Config.rag_query_rewrite_enabled:
         return False
+
     if not history:
         return False
+
     return _needs_rewrite(cleaned)
 
 
@@ -76,12 +81,16 @@ def _history_snippet(history: list[BaseMessage], *, limit: int = 6) -> str:
             role = "Assistant"
         else:
             continue
+
         content = str(message.content or "").strip()
         if not content:
             continue
+
         if len(content) > 400:
             content = f"{content[:399]}…"
+
         lines.append(f"{role}: {content}")
+
     return "\n".join(lines)
 
 
@@ -126,11 +135,13 @@ async def rewrite_retrieval_query(
     try:
         model = _get_rewrite_model()
         started = time.perf_counter()
+
         response = await model.ainvoke(prompt)
         logger.info(
             "rag.rewrite elapsed_ms=%.1f",
             (time.perf_counter() - started) * 1000,
         )
+
         content = response.content
         if isinstance(content, list):
             text = "".join(
@@ -143,12 +154,15 @@ async def rewrite_retrieval_query(
         rewritten = " ".join(text.strip().split())
         if not rewritten:
             return cleaned
+
         if (
             len(rewritten) >= 2
             and rewritten[0] == rewritten[-1]
             and rewritten[0] in {'"', "'"}
         ):
             rewritten = rewritten[1:-1].strip()
+
         return rewritten or cleaned
+
     except Exception:
         return cleaned

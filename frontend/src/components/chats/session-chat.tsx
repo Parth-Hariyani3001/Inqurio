@@ -124,6 +124,7 @@ export function SessionChat({
   )
   const [isSending, setIsSending] = useState(false)
   const [streamingId, setStreamingId] = useState<string | null>(null)
+  const [phaseLabel, setPhaseLabel] = useState('Searching the paper…')
 
   useEffect(() => {
     if (isSending) return
@@ -148,6 +149,7 @@ export function SessionChat({
     setDraft('')
     setIsSending(true)
     setStreamingId(optimisticAssistantId)
+    setPhaseLabel('Searching the paper…')
     setItems((current) => [
       ...current,
       {
@@ -181,7 +183,15 @@ export function SessionChat({
             ),
           )
         },
+        onPhase: (phase, label) => {
+          if (phase === 'writing') {
+            setPhaseLabel('')
+            return
+          }
+          setPhaseLabel(label)
+        },
         onAssistantDelta: (delta) => {
+          setPhaseLabel('')
           setItems((current) =>
             current.map((item) =>
               item.clientKey === optimisticAssistantId
@@ -191,6 +201,7 @@ export function SessionChat({
           )
         },
         onAssistantDone: (message) => {
+          setPhaseLabel('')
           setItems((current) =>
             current.map((item) =>
               item.clientKey === optimisticAssistantId
@@ -201,6 +212,7 @@ export function SessionChat({
         },
         onError: (detail) => {
           toast.error(detail)
+          setPhaseLabel('')
           setItems((current) =>
             current.filter(
               (item) =>
@@ -228,6 +240,7 @@ export function SessionChat({
     } finally {
       setIsSending(false)
       setStreamingId(null)
+      setPhaseLabel('Searching the paper…')
     }
   }
 
@@ -328,7 +341,7 @@ export function SessionChat({
                                     <Spinner />
                                   </MarkerIcon>
                                   <MarkerContent className="shimmer">
-                                    Searching the paper…
+                                    {phaseLabel || 'Searching the paper…'}
                                   </MarkerContent>
                                 </Marker>
                               </Message>
