@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import Markdown from 'react-markdown'
+import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -19,10 +19,28 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  Popover,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
+import type { AnswerTerm } from '#/components/chats/answer-terms.ts'
+import {
+  prepareAnswerMarkdown,
+  sourceLabel,
+  splitAnswerTerms,
+  termFromHref,
+} from '#/components/chats/answer-terms.ts'
 
 const katexSanitizeSchema: SanitizeSchema = {
   ...defaultSchema,
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), 'inquiro-term'],
+  },
   attributes: {
     ...defaultSchema.attributes,
     div: [...(defaultSchema.attributes?.div ?? []), 'className', 'style'],
@@ -109,26 +127,26 @@ function readThemeBackground(): string {
   document.body.appendChild(probe)
   const fill = getComputedStyle(probe).backgroundColor
   probe.remove()
-  return fill || (readResolvedScheme() === 'dark' ? '#111827' : '#ffffff')
+  return fill || (readResolvedScheme() === 'dark' ? '#161A20' : '#F3F5F7')
 }
 
 function diagramTheme(scheme: ColorScheme): DiagramTheme {
   // Soft Mermaid-like flowchart boxes (rounded rects, muted fills).
   if (scheme === 'dark') {
     return {
-      nodeFill: '#1E293B',
-      nodeStroke: '#7DD3FC',
-      nodeText: '#F1F5F9',
-      edge: '#94A3B8',
-      edgeText: '#CBD5E1',
+      nodeFill: '#252A32',
+      nodeStroke: '#7EB8B8',
+      nodeText: '#F3F5F7',
+      edge: '#8A939E',
+      edgeText: '#C5CBD2',
     }
   }
   return {
-    nodeFill: '#EEF6FF',
-    nodeStroke: '#3B82F6',
-    nodeText: '#0F172A',
-    edge: '#64748B',
-    edgeText: '#334155',
+    nodeFill: '#EEF4F4',
+    nodeStroke: '#1F5C63',
+    nodeText: '#1B2228',
+    edge: '#5E6770',
+    edgeText: '#3A424A',
   }
 }
 
@@ -568,6 +586,38 @@ function DotBlock({
   )
 }
 
+function TermPopover({
+  entry,
+  variant,
+}: {
+  entry: AnswerTerm
+  variant: 'inline' | 'chip'
+}) {
+  return (
+    <PopoverTrigger>
+      <Button
+        aria-label={`Define ${entry.term}`}
+        className={
+          variant === 'inline'
+            ? 'inline h-auto min-h-0 whitespace-normal rounded-none border-0 bg-transparent px-0 py-0 align-baseline font-serif text-[1em] font-normal leading-[inherit] text-inherit underline decoration-dotted decoration-foreground/45 underline-offset-[0.18em] hover:bg-transparent hover:decoration-solid'
+            : 'h-7 rounded-full px-2.5 font-normal'
+        }
+        size={variant === 'chip' ? 'xs' : 'default'}
+        variant={variant === 'chip' ? 'outline' : 'ghost'}
+      >
+        {entry.term}
+      </Button>
+      <Popover className="w-80">
+        <PopoverHeader>
+          <PopoverTitle>{entry.term}</PopoverTitle>
+          <PopoverDescription>{sourceLabel(entry.source)}</PopoverDescription>
+        </PopoverHeader>
+        <p className="text-sm leading-relaxed">{entry.plain}</p>
+      </Popover>
+    </PopoverTrigger>
+  )
+}
+
 function MarkdownCode({
   className,
   children,
@@ -608,16 +658,22 @@ export function AssistantMarkdown({
   className?: string
   isStreaming?: boolean
 }) {
+  const { prose, terms } = splitAnswerTerms(content)
+  const markdown = prepareAnswerMarkdown(prose, terms)
+  const termsByKey = new Map(
+    terms.map((entry) => [entry.term.toLowerCase(), entry]),
+  )
+
   return (
     <div
       className={cn(
-        'text-sm leading-relaxed break-words',
-        '[&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2',
+        'font-serif text-[1.0625rem] leading-[1.7] break-words',
+        '[&_a]:text-accent-foreground [&_a]:underline [&_a]:underline-offset-2',
         '[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground',
         '[&_code]:rounded-sm [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em]',
-        '[&_h1]:mb-2 [&_h1]:mt-3 [&_h1]:font-serif [&_h1]:text-base [&_h1]:font-semibold',
-        '[&_h2]:mb-2 [&_h2]:mt-3 [&_h2]:font-serif [&_h2]:text-sm [&_h2]:font-semibold',
-        '[&_h3]:mb-1.5 [&_h3]:mt-2 [&_h3]:text-sm [&_h3]:font-semibold',
+        '[&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:font-serif [&_h1]:text-xl [&_h1]:leading-snug [&_h1]:font-semibold',
+        '[&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:font-serif [&_h2]:text-lg [&_h2]:leading-snug [&_h2]:font-semibold',
+        '[&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:font-serif [&_h3]:text-base [&_h3]:leading-snug [&_h3]:font-semibold',
         '[&_.katex]:text-[1.05em] [&_.katex]:text-inherit',
         '[&_.katex-display]:my-3 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden',
         '[&_li]:my-0.5',
@@ -638,15 +694,38 @@ export function AssistantMarkdown({
           [rehypeKatex, { throwOnError: false }],
           [rehypeSanitize, katexSanitizeSchema],
         ]}
+        urlTransform={(url) =>
+          url.startsWith('inquiro-term:') ? url : defaultUrlTransform(url)
+        }
         components={{
+          a: ({ href, children }) => {
+            const term = termFromHref(href)
+            const entry = term ? termsByKey.get(term.toLowerCase()) : undefined
+            if (entry) return <TermPopover entry={entry} variant="inline" />
+            return <a href={href}>{children}</a>
+          },
           code: (props) => (
             <MarkdownCode {...props} isStreaming={isStreaming} />
           ),
           pre: ({ children }) => <>{children}</>,
         }}
       >
-        {content}
+        {markdown}
       </Markdown>
+      {terms.length > 0 ? (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border pt-3 font-sans">
+          <span className="mr-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            Key terms
+          </span>
+          {terms.map((entry) => (
+            <TermPopover
+              key={entry.term}
+              entry={entry}
+              variant="chip"
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

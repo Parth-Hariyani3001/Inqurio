@@ -32,11 +32,11 @@ export function LibraryCatalog({
     <section aria-busy={isFetching} className="flex flex-1 flex-col gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-muted-foreground text-xs tracking-wide">
+          <p className="text-muted-foreground text-xs">
             {query ? 'Papers matching' : 'Your papers'}
           </p>
           {query ? (
-            <p className="truncate font-serif text-lg tracking-tight text-foreground">
+            <p className="truncate text-lg font-medium tracking-tight text-foreground">
               {query}
             </p>
           ) : null}

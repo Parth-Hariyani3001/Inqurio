@@ -5,17 +5,18 @@ import { shadcn } from '@clerk/ui/themes'
 const clerkAppearance = {
   theme: shadcn,
   variables: {
-    borderRadius: '0.4rem',
+    borderRadius: '0.55rem',
     colorBorder: 'var(--border)',
     colorShadow: 'transparent',
     fontFamily: 'var(--font-sans)',
     colorBackground: 'transparent',
+    colorPrimary: 'var(--primary)',
   },
   elements: {
     rootBox: 'w-full',
     cardBox: 'shadow-none border-0 bg-transparent',
     card: 'shadow-none bg-transparent',
-    headerTitle: 'font-serif text-foreground tracking-tight',
+    headerTitle: 'font-display text-foreground tracking-tight',
     headerSubtitle: 'text-muted-foreground',
     socialButtonsBlockButton:
       'border border-border bg-background text-foreground hover:bg-muted',

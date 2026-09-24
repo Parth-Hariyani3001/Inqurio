@@ -87,7 +87,7 @@ function RouteComponent() {
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-full" />
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            <h1 className="min-w-0 truncate font-serif text-sm tracking-tight">
+            <h1 className="min-w-0 truncate text-sm font-medium tracking-tight">
               {title}
             </h1>
             {isLoading ? <Spinner /> : null}

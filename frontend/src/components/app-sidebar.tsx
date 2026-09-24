@@ -1,13 +1,8 @@
 import type { ComponentProps } from 'react'
-import {
-  BookMarked,
-  BrainCircuit,
-  Compass,
-  Library,
-  MessageSquare,
-} from 'lucide-react'
+import { BookMarked, Compass, Library, MessageSquare } from 'lucide-react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 
+import { InquiroMark } from '#/components/inquiro-mark.tsx'
 import { RecentChats } from '#/components/chats/recent-chats.tsx'
 import { NavUser } from '@/components/nav-user'
 import {
@@ -54,8 +49,8 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
               tooltip="Inquiro"
               onPress={() => navigate({ to: '/' })}
             >
-              <BrainCircuit />
-              <span className="font-serif">Inquiro</span>
+              <InquiroMark className="text-sidebar-primary" />
+              <span className="font-display">Inquiro</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

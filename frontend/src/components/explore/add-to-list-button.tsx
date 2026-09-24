@@ -7,7 +7,8 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '#/lib/api.ts'
-import { workDetailQueryOptions, type IngestStatus } from '#/lib/openalex.ts'
+import { workDetailQueryOptions } from '#/lib/openalex.ts'
+import type { IngestStatus } from '#/lib/openalex.ts'
 import { uploadPaper } from '#/lib/papers.ts'
 
 export function AddToListButton({
@@ -67,7 +68,10 @@ export function AddToListButton({
       toast('Adding after parse.')
     },
     onError: (error) => {
-      if (error instanceof ApiError && error.code === 'user_paper_already_assigned') {
+      if (
+        error instanceof ApiError &&
+        error.code === 'user_paper_already_assigned'
+      ) {
         setOnList(true)
         toast('This paper is already on your list.')
         return

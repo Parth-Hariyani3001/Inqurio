@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import {
   AlertCircle,
   ChevronLeft,
@@ -413,10 +413,13 @@ function PdfPage({
     <div
       ref={wrapRef}
       className={cn('pdf-page border border-border')}
-      style={{
-        width: metrics.width * scale,
-        height: metrics.height * scale,
-      }}
+      style={
+        {
+          width: metrics.width * scale,
+          height: metrics.height * scale,
+          '--scale-factor': scale,
+        } as CSSProperties
+      }
     >
       {paint ? <canvas ref={canvasRef} /> : null}
       <div ref={textLayerRef} className="textLayer" />

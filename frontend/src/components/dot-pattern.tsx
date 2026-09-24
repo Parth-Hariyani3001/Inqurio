@@ -1,4 +1,5 @@
-import { type ComponentProps, useId } from "react";
+import type{ ComponentProps } from "react"
+import { useId } from "react";
 
 import { cn } from "@/lib/utils";
 

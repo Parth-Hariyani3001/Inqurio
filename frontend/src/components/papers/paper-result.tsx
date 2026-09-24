@@ -47,7 +47,7 @@ export function PaperResult({ paper }: { paper: PaperResponse }) {
         {extraAuthors}
       </p>
       {paper.doi ? (
-        <div className="flex flex-wrap items-center gap-2 text-xs tracking-wide text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <a
             className="font-mono underline-offset-4 hover:text-foreground hover:underline"
             href={paper.doi.startsWith('http') ? paper.doi : `https://doi.org/${paper.doi}`}

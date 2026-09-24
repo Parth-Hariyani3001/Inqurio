@@ -1,7 +1,7 @@
 export function PaperExcerpt() {
   return (
-    <figure className="border border-border bg-card p-6 text-card-foreground sm:p-8">
-      <figcaption className="flex items-baseline justify-between gap-4 text-muted-foreground text-xs tracking-wide">
+    <figure className="rounded-xl border border-border bg-card p-6 text-card-foreground sm:p-8">
+      <figcaption className="flex items-baseline justify-between gap-4 text-muted-foreground text-xs">
         <span>Methods · sample</span>
         <span className="font-mono">arXiv:2403.11208</span>
       </figcaption>
@@ -16,17 +16,15 @@ export function PaperExcerpt() {
           Participants were recruited from three outpatient clinics between
           March 2019 and January 2021. We excluded records with missing
           baseline labs and those enrolled after the protocol amendment.{' '}
-          <mark className="bg-accent text-accent-foreground">
+          <mark className="paper-highlight animate-highlight-draw rounded-[0.12em] px-[0.12em] text-highlight-foreground">
             The analytic sample therefore omits 18% of otherwise eligible
             patients, concentrated in the later months of recruitment.
           </mark>{' '}
           Sensitivity analyses reintroduce these cases under two missingness
           assumptions.
         </p>
-        <aside className="border-t border-border pt-4 text-sm lg:border-t-0 lg:border-l lg:pt-0 lg:pl-4">
-          <p className="text-muted-foreground text-xs tracking-wide">
-            Question
-          </p>
+        <aside className="paper-question animate-question-in border-t border-highlight/50 pt-4 text-sm lg:border-t-0 lg:border-l lg:border-highlight/50 lg:pt-0 lg:pl-4">
+          <p className="text-muted-foreground text-xs">Question</p>
           <p className="mt-2 font-serif text-foreground leading-snug">
             Who is missing from the later months, and does that change the
             reported effect?

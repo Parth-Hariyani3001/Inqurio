@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 
 const Navbar = () => {
   return (
-    <header className="border-b bg-background">
+    <header className="sticky top-0 z-20 bg-background/85 backdrop-blur-md">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
         <Logo />
         <div className="flex items-center gap-1 sm:gap-2">

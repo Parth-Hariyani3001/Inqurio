@@ -60,7 +60,10 @@ export function MessageCitationsList({
       >
         <MarkerIcon>
           <ChevronRight
-            className={cn('transition-transform', open && 'rotate-90')}
+            className={cn(
+              'transition-transform duration-200 ease-out',
+              open && 'rotate-90',
+            )}
           />
         </MarkerIcon>
         <MarkerContent>Sources ({count})</MarkerContent>

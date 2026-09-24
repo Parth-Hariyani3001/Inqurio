@@ -4,6 +4,7 @@ import { useAuth, useUser } from '@clerk/tanstack-react-start'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
+import { toPlainAnswer } from '#/components/chats/answer-terms.ts'
 import { AssistantMarkdown } from '#/components/chats/assistant-markdown.tsx'
 import { MessageCitationsList } from '#/components/chats/message-citations.tsx'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -41,6 +42,7 @@ import {
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller'
 import { Spinner } from '@/components/ui/spinner'
+import { cn } from '@/lib/utils'
 import {
   parseMessageCitations,
   streamSessionMessage,
@@ -276,7 +278,7 @@ export function SessionChat({
           <MessageScrollerProvider autoScroll defaultScrollPosition="end">
             <MessageScroller className="h-full">
               <MessageScrollerViewport>
-                <MessageScrollerContent className="gap-5 px-4 py-5">
+                <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-5 px-4 py-5">
                   {items.length === 0 ? (
                     <MessageScrollerItem messageId="empty">
                       <Empty className="border-0">
@@ -297,7 +299,7 @@ export function SessionChat({
                               isDisabled={isSending}
                               size="sm"
                               variant="outline"
-                              className="w-full"
+                              className="w-full hover:border-highlight hover:bg-highlight/35 hover:text-highlight-foreground"
                               onPress={() => {
                                 void sendMessage(suggestion)
                               }}
@@ -320,12 +322,20 @@ export function SessionChat({
                         sessionDayKey(message.created_at) !==
                           sessionDayKey(items[index - 1]!.created_at)
 
+                      const isEnteringAssistant =
+                        !isUser && message.clientKey === streamingId
+
                       return (
                         <MessageScrollerItem
                           key={message.clientKey}
                           messageId={message.uid}
                         >
-                          <div className="flex flex-col gap-5">
+                          <div
+                            className={cn(
+                              'flex flex-col gap-5',
+                              isEnteringAssistant && 'chat-enter animate-chat-enter',
+                            )}
+                          >
                             {showDayMarker ? (
                               <Marker variant="separator">
                                 <MarkerContent>
@@ -360,7 +370,7 @@ export function SessionChat({
                                     </Avatar>
                                   ) : (
                                     <Avatar size="sm">
-                                      <AvatarFallback className="font-serif">
+                                      <AvatarFallback className="font-display">
                                         In
                                       </AvatarFallback>
                                     </Avatar>
@@ -398,7 +408,7 @@ export function SessionChat({
                                         size="icon-xs"
                                         variant="ghost"
                                         onPress={() => {
-                                          void copyMessage(message.content)
+                                          void copyMessage(toPlainAnswer(message.content))
                                         }}
                                       >
                                         <Copy />
@@ -424,8 +434,11 @@ export function SessionChat({
             </MessageScroller>
           </MessageScrollerProvider>
         </div>
-        <div className="shrink-0 border-t border-border bg-card p-3">
-          <Field data-disabled={isSending ? true : undefined}>
+        <div className="shrink-0 border-t border-border bg-card px-4 py-3">
+          <Field
+            className="mx-auto w-full max-w-4xl"
+            data-disabled={isSending ? true : undefined}
+          >
             <InputGroup isDisabled={isSending}>
               <InputGroupTextarea
                 disabled={isSending}

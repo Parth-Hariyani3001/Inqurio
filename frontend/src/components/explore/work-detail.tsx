@@ -75,7 +75,7 @@ export function WorkDetail({ work }: { work: OpenAlexWorkDetail }) {
             {work.display_name}
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">{authors}</p>
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs tracking-wide text-muted-foreground">
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span>{year}</span>
             <Separator className="h-3" orientation="vertical" />
             <span>{work.venue || 'Venue not listed'}</span>
@@ -132,7 +132,7 @@ export function WorkDetail({ work }: { work: OpenAlexWorkDetail }) {
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_16rem]">
         <section>
-          <p className="text-muted-foreground text-xs tracking-wide">Abstract</p>
+          <p className="text-muted-foreground text-xs">Abstract</p>
           {work.abstract ? (
             <p className="mt-3 font-serif text-base leading-[1.7] text-foreground/90 sm:text-[1.05rem]">
               {work.abstract}
@@ -150,7 +150,7 @@ export function WorkDetail({ work }: { work: OpenAlexWorkDetail }) {
           {work.language ? <Fact label="Language" value={work.language} /> : null}
           {work.doi ? (
             <div>
-              <p className="text-muted-foreground text-xs tracking-wide">DOI</p>
+              <p className="text-muted-foreground text-xs">DOI</p>
               <a
                 className="mt-1 block font-mono text-xs underline-offset-4 hover:text-foreground hover:underline"
                 href={work.doi}
@@ -163,7 +163,7 @@ export function WorkDetail({ work }: { work: OpenAlexWorkDetail }) {
           ) : null}
           {work.oa_url ? (
             <div>
-              <p className="text-muted-foreground text-xs tracking-wide">
+              <p className="text-muted-foreground text-xs">
                 Open copy
               </p>
               <a
@@ -178,7 +178,7 @@ export function WorkDetail({ work }: { work: OpenAlexWorkDetail }) {
           ) : null}
           {work.topics.length > 0 ? (
             <div>
-              <p className="text-muted-foreground text-xs tracking-wide">Topics</p>
+              <p className="text-muted-foreground text-xs">Topics</p>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {work.topics.map((topic) => (
                   <Badge key={topic} variant="outline">
@@ -190,7 +190,7 @@ export function WorkDetail({ work }: { work: OpenAlexWorkDetail }) {
           ) : null}
           {work.institutions.length > 0 ? (
             <div>
-              <p className="text-muted-foreground text-xs tracking-wide">
+              <p className="text-muted-foreground text-xs">
                 Institutions
               </p>
               <p className="mt-1 text-muted-foreground">
@@ -207,7 +207,7 @@ export function WorkDetail({ work }: { work: OpenAlexWorkDetail }) {
 function Fact({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-muted-foreground text-xs tracking-wide">{label}</p>
+      <p className="text-muted-foreground text-xs">{label}</p>
       <p className="mt-1 font-mono text-xs">{value}</p>
     </div>
   )

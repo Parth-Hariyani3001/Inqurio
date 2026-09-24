@@ -44,7 +44,7 @@ export function LibraryResult({ paper }: { paper: UserPaperResponse }) {
         {authors || 'Unknown authors'}
         {extraAuthors}
       </p>
-      <div className="flex flex-wrap items-center gap-2 text-xs tracking-wide text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>Added {formatAddedAt(paper.added_at)}</span>
         {paper.doi ? (
           <a

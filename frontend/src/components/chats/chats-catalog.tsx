@@ -30,7 +30,7 @@ export function ChatsCatalog({
     <section aria-busy={isFetching} className="flex flex-1 flex-col gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-muted-foreground text-xs tracking-wide">
+          <p className="text-muted-foreground text-xs">
             Your chats
           </p>
           <p className="mt-1 font-mono text-xs text-muted-foreground">

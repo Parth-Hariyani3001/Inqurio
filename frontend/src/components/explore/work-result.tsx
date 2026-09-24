@@ -14,7 +14,7 @@ export function WorkResult({ work }: { work: OpenAlexWork }) {
   return (
     <article className="grid grid-cols-[3.25rem_minmax(0,1fr)] gap-x-4 px-4 py-5 sm:grid-cols-[4rem_minmax(0,1fr)] sm:px-6">
       <time
-        className="font-serif text-lg tabular-nums leading-none tracking-tight text-muted-foreground"
+        className="tabular-nums text-lg leading-none tracking-tight text-muted-foreground"
         dateTime={
           work.publication_year ? String(work.publication_year) : undefined
         }
@@ -39,7 +39,7 @@ export function WorkResult({ work }: { work: OpenAlexWork }) {
           {authors || 'Unknown authors'}
           {extraAuthors}
         </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs tracking-wide text-muted-foreground">
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <span>{work.venue || 'Venue not listed'}</span>
           <Separator className="h-3" orientation="vertical" />
           <span className="font-mono">

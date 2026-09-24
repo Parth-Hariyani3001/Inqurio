@@ -102,10 +102,10 @@ function CatalogPager({
   return (
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div className="min-w-0">
-        <p className="text-muted-foreground text-xs tracking-wide">
+        <p className="text-muted-foreground text-xs">
           Works matching
         </p>
-        <p className="truncate font-serif text-lg tracking-tight text-foreground">
+        <p className="truncate text-lg font-medium tracking-tight text-foreground">
           {query}
         </p>
         <p className="mt-1 font-mono text-xs text-muted-foreground">
